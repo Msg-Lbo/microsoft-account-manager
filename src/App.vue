@@ -227,6 +227,50 @@
           </n-card>
         </n-space>
       </n-tab-pane>
+
+      <n-tab-pane name="api-docs" tab="API文档">
+        <n-space vertical size="large">
+          <n-card title="接口总览" size="small">
+            <p class="hint">Base URL：{{ apiBaseUrl }}</p>
+            <ul class="api-list">
+              <li>
+                <code>POST /api/upload/ingest</code>
+                ：外部平台上传账号到本系统（token 鉴权）。
+              </li>
+              <li>
+                <code>GET /api/open/accounts/:id/messages?mode=graph|imap</code>
+                ：按账号 ID 获取全部邮件（开放 API）。
+              </li>
+              <li>
+                <code>POST /api/open/messages</code>
+                ：按账号 ID 或邮箱地址获取全部邮件（开放 API）。
+              </li>
+              <li>
+                <code>POST /api/auth/login</code>
+                ：后台登录，登录后可调用管理端 API。
+              </li>
+            </ul>
+          </n-card>
+
+          <n-card title="开放取件 API（Token 鉴权）" size="small">
+            <n-space vertical>
+              <p class="hint">支持 Header：{{ mailApiTokenHeader }} 或 Authorization: Bearer token。</p>
+              <p class="hint">按账号 ID 取件：</p>
+              <n-code :code="openApiCurlById" language="bash" word-wrap />
+              <p class="hint">按邮箱地址取件：</p>
+              <n-code :code="openApiCurlByAccount" language="bash" word-wrap />
+            </n-space>
+          </n-card>
+
+          <n-card title="管理端 API（登录会话）" size="small">
+            <n-space vertical>
+              <n-code :code="adminApiDoc" language="text" word-wrap />
+              <p class="hint">登录并使用 Cookie 调用管理端接口：</p>
+              <n-code :code="adminLoginCurl" language="bash" word-wrap />
+            </n-space>
+          </n-card>
+        </n-space>
+      </n-tab-pane>
     </n-tabs>
 
     <n-modal v-model:show="editVisible" preset="card" title="编辑账号" style="max-width: 760px">
@@ -354,7 +398,7 @@ const loginForm = reactive({
   password: ''
 });
 
-const activeTab = ref<'accounts' | 'ingest'>('accounts');
+const activeTab = ref<'accounts' | 'ingest' | 'api-docs'>('accounts');
 
 const accounts = ref<AccountItem[]>([]);
 const searchKeyword = ref('');
@@ -408,6 +452,7 @@ const ingestConfig = reactive<IngestConfig>({
 
 const ingestEndpointPath = ref('/api/upload/ingest');
 const ingestTokenHeader = ref('x-ingest-token');
+const mailApiTokenHeader = 'x-mail-api-token';
 
 const rowKey = (row: AccountItem): number => row.id;
 
@@ -568,6 +613,41 @@ const mailModeOptions: Array<{ label: string; value: MailFetchMode }> = [
 ];
 
 const mailCurrentModeLabel = computed(() => (mailCurrentMode.value === 'imap' ? 'IMAP' : 'Graph'));
+
+const apiBaseUrl = computed(() => siteOrigin.value || 'https://your-domain');
+
+const openApiCurlById = computed(() => {
+  return `curl "${apiBaseUrl.value}/api/open/accounts/1/messages?mode=graph" \\
+  -H "${mailApiTokenHeader}: <MAIL_API_TOKEN>"`;
+});
+
+const openApiCurlByAccount = computed(() => {
+  return `curl -X POST "${apiBaseUrl.value}/api/open/messages" \\
+  -H "Content-Type: application/json" \\
+  -H "${mailApiTokenHeader}: <MAIL_API_TOKEN>" \\
+  -d '{"account":"example@outlook.com","mode":"imap"}'`;
+});
+
+const adminApiDoc = `POST /api/auth/login                     后台管理员登录
+POST /api/auth/logout                    退出登录
+GET  /api/auth/me                        获取当前登录用户
+GET  /api/accounts                       获取账号列表
+POST /api/accounts                       新增账号
+PUT  /api/accounts/:id                   更新账号
+DELETE /api/accounts/:id                 删除账号
+POST /api/accounts/import                批量导入账号
+POST /api/accounts/refresh               刷新 refresh_token
+GET  /api/accounts/:id/messages?mode=... 管理端按账号取件
+GET  /api/ingest-config                  获取上传映射配置
+PUT  /api/ingest-config                  保存上传映射配置`;
+
+const adminLoginCurl = computed(() => {
+  return `curl -c cookie.txt -X POST "${apiBaseUrl.value}/api/auth/login" \\
+  -H "Content-Type: application/json" \\
+  -d '{"username":"admin","password":"<ADMIN_PASSWORD>"}'
+
+curl -b cookie.txt "${apiBaseUrl.value}/api/accounts"`;
+});
 
 const ingestEndpointUrl = computed(() =>
   siteOrigin.value ? `${siteOrigin.value}${ingestEndpointPath.value}` : ingestEndpointPath.value

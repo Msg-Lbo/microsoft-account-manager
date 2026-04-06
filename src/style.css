@@ -93,6 +93,23 @@ body {
   font-size: 0.86rem;
 }
 
+.api-list {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 8px;
+}
+
+.api-list li {
+  line-height: 1.5;
+}
+
+.api-list code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: rgba(22, 52, 71, 0.08);
+}
+
 .hidden-file-input {
   display: none;
 }
