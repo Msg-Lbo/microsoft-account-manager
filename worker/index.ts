@@ -332,6 +332,19 @@ app.delete('/api/accounts/:id', async (c) => {
   return c.json({ ok: true as const });
 });
 
+app.patch('/api/accounts/:id/remark', async (c) => {
+  const id = parseNumericId(c.req.param('id'));
+  const body = await readJson<{ remark?: unknown }>(c);
+  const remark = normalizeRemark(body.remark);
+
+  const item = await updateAccountRemark(c.env.DB, id, remark);
+  if (!item) {
+    throw new HTTPException(404, { message: '账号不存在' });
+  }
+
+  return c.json({ item });
+});
+
 app.post('/api/accounts/import', async (c) => {
   const body = await readJson<{ text?: string }>(c);
   const text = asText(body.text).trim();
@@ -491,6 +504,26 @@ app.post('/api/open/messages', async (c) => {
     account: account.account,
     mode,
     messages: result.messages
+  });
+});
+
+app.patch('/api/open/accounts/:id/remark', async (c) => {
+  validateOpenApiToken(c, getMailApiToken(c.env));
+
+  const id = parseNumericId(c.req.param('id'));
+  const body = await readJson<{ remark?: unknown }>(c);
+  const remark = normalizeRemark(body.remark);
+
+  const item = await updateAccountRemark(c.env.DB, id, remark);
+  if (!item) {
+    throw new HTTPException(404, { message: '账号不存在' });
+  }
+
+  return c.json({
+    ok: true,
+    id: item.id,
+    account: item.account,
+    remark: item.remark
   });
 });
 
@@ -678,6 +711,14 @@ function normalizeAccountPayload(input: Partial<AccountPayload>, requireBase: bo
   return payload;
 }
 
+function normalizeRemark(input: unknown): string | null {
+  const remark = asText(input).trim();
+  if (remark.length > 500) {
+    throw new HTTPException(400, { message: '备注长度不能超过 500' });
+  }
+  return remark || null;
+}
+
 function parseCaptchaLine(line: string, delimiter: string): AccountPayload {
   const parts = line.split(delimiter).map((item) => item.trim());
   if (parts.length < 2 || parts.length > 4) {
@@ -791,6 +832,14 @@ async function fetchAllAccounts(db: D1Database): Promise<AccountRow[]> {
 async function fetchAccountById(db: D1Database, id: number): Promise<AccountRow | null> {
   const row = await db.prepare(`${ACCOUNT_SELECT_SQL} WHERE id = ?`).bind(id).first<AccountRow>();
   return row ?? null;
+}
+
+async function updateAccountRemark(db: D1Database, id: number, remark: string | null): Promise<AccountRow | null> {
+  const result = await db.prepare('UPDATE accounts SET remark = ? WHERE id = ?').bind(remark, id).run();
+  if ((result.meta.changes ?? 0) === 0) {
+    return null;
+  }
+  return fetchAccountById(db, id);
 }
 
 async function fetchAccountByAccount(db: D1Database, account: string): Promise<AccountRow | null> {
@@ -1454,7 +1503,8 @@ function isPublicApiPath(pathname: string): boolean {
     pathname === '/api/auth/login' ||
     pathname === INGEST_PATH ||
     pathname === OPEN_MESSAGES_PATH ||
-    /^\/api\/open\/accounts\/\d+\/messages$/.test(pathname)
+    /^\/api\/open\/accounts\/\d+\/messages$/.test(pathname) ||
+    /^\/api\/open\/accounts\/\d+\/remark$/.test(pathname)
   );
 }
 

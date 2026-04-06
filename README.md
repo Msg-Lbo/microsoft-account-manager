@@ -239,6 +239,9 @@ npm run deploy
 - `POST /api/open/messages`
   - 作用：按 `id` 或 `account` 获取该账号全部邮件
   - 适用：第三方平台只知道邮箱地址时
+- `PATCH /api/open/accounts/:id/remark`
+  - 作用：更新指定账号备注
+  - 适用：第三方平台同步标签、状态说明等业务备注
 
 鉴权方式（任选其一）：
 
@@ -269,6 +272,12 @@ curl -X POST "https://your-domain/api/open/messages" \
   -H "Content-Type: application/json" \
   -H "x-mail-api-token: your_mail_api_token" \
   -d '{"account":"example@outlook.com","mode":"imap"}'
+
+# 更新备注
+curl -X PATCH "https://your-domain/api/open/accounts/1/remark" \
+  -H "Content-Type: application/json" \
+  -H "x-mail-api-token: your_mail_api_token" \
+  -d '{"remark":"需要重点跟进"}'
 ```
 
 ---
@@ -283,6 +292,7 @@ curl -X POST "https://your-domain/api/open/messages" \
 - `PUT /api/accounts/:id`：更新指定账号
 - `DELETE /api/accounts/:id`：删除指定账号
 - `POST /api/accounts/import`：批量导入账号文本
+- `PATCH /api/accounts/:id/remark`：更新指定账号备注（管理端用）
 - `POST /api/accounts/refresh`：批量刷新账号 refresh_token
 - `GET /api/accounts/:id/messages?mode=graph|imap`：按账号 ID 拉取全部邮件（管理端用）
 - `GET /api/ingest-config`：读取外部上传字段映射配置

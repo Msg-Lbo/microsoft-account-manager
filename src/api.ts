@@ -95,6 +95,13 @@ export const api = {
     });
   },
 
+  updateAccountRemark(id: number, remark: string): Promise<{ item: AccountItem }> {
+    return request<{ item: AccountItem }>(`/api/accounts/${id}/remark`, {
+      method: 'PATCH',
+      body: JSON.stringify({ remark })
+    });
+  },
+
   importAccounts(text: string): Promise<ImportResult> {
     return request<ImportResult>('/api/accounts/import', {
       method: 'POST',
@@ -129,6 +136,21 @@ export const api = {
     const params = new URLSearchParams({ mode });
     return request<{ accountId: number; account: string; mode: MailFetchMode; messages: AccountMailItem[] }>(
       `/api/accounts/${id}/messages?${params.toString()}`
+    );
+  },
+
+  openUpdateAccountRemark(id: number, remark: string): Promise<{
+    ok: true;
+    id: number;
+    account: string;
+    remark: string | null;
+  }> {
+    return request<{ ok: true; id: number; account: string; remark: string | null }>(
+      `/api/open/accounts/${id}/remark`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ remark })
+      }
     );
   }
 };

@@ -246,6 +246,10 @@
                 ：按账号 ID 或邮箱地址获取全部邮件（开放 API）。
               </li>
               <li>
+                <code>PATCH /api/open/accounts/:id/remark</code>
+                ：更新指定账号备注（开放 API）。
+              </li>
+              <li>
                 <code>POST /api/auth/login</code>
                 ：后台登录，登录后可调用管理端 API。
               </li>
@@ -259,6 +263,8 @@
               <n-code :code="openApiCurlById" language="bash" word-wrap />
               <p class="hint">按邮箱地址取件：</p>
               <n-code :code="openApiCurlByAccount" language="bash" word-wrap />
+              <p class="hint">更新账号备注：</p>
+              <n-code :code="openApiCurlUpdateRemark" language="bash" word-wrap />
             </n-space>
           </n-card>
 
@@ -628,6 +634,13 @@ const openApiCurlByAccount = computed(() => {
   -d '{"account":"example@outlook.com","mode":"imap"}'`;
 });
 
+const openApiCurlUpdateRemark = computed(() => {
+  return `curl -X PATCH "${apiBaseUrl.value}/api/open/accounts/1/remark" \\
+  -H "Content-Type: application/json" \\
+  -H "${mailApiTokenHeader}: <MAIL_API_TOKEN>" \\
+  -d '{"remark":"需要重点跟进"}'`;
+});
+
 const adminApiDoc = `POST /api/auth/login                     后台管理员登录
 POST /api/auth/logout                    退出登录
 GET  /api/auth/me                        获取当前登录用户
@@ -636,6 +649,7 @@ POST /api/accounts                       新增账号
 PUT  /api/accounts/:id                   更新账号
 DELETE /api/accounts/:id                 删除账号
 POST /api/accounts/import                批量导入账号
+PATCH /api/accounts/:id/remark           更新备注
 POST /api/accounts/refresh               刷新 refresh_token
 GET  /api/accounts/:id/messages?mode=... 管理端按账号取件
 GET  /api/ingest-config                  获取上传映射配置
