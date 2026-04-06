@@ -238,6 +238,10 @@
                 ：外部平台上传账号到本系统（token 鉴权）。
               </li>
               <li>
+                <code>GET /api/open/accounts</code>
+                ：获取账号列表（开放 API，支持 keyword 查询）。
+              </li>
+              <li>
                 <code>GET /api/open/accounts/:id/messages?mode=graph|imap</code>
                 ：按账号 ID 获取全部邮件（开放 API）。
               </li>
@@ -259,6 +263,8 @@
           <n-card title="开放取件 API（Token 鉴权）" size="small">
             <n-space vertical>
               <p class="hint">支持 Header：{{ mailApiTokenHeader }} 或 Authorization: Bearer token。</p>
+              <p class="hint">获取账号列表：</p>
+              <n-code :code="openApiCurlListAccounts" language="bash" word-wrap />
               <p class="hint">按账号 ID 取件：</p>
               <n-code :code="openApiCurlById" language="bash" word-wrap />
               <p class="hint">按邮箱地址取件：</p>
@@ -621,6 +627,11 @@ const mailModeOptions: Array<{ label: string; value: MailFetchMode }> = [
 const mailCurrentModeLabel = computed(() => (mailCurrentMode.value === 'imap' ? 'IMAP' : 'Graph'));
 
 const apiBaseUrl = computed(() => siteOrigin.value || 'https://your-domain');
+
+const openApiCurlListAccounts = computed(() => {
+  return `curl "${apiBaseUrl.value}/api/open/accounts?keyword=outlook" \\
+  -H "${mailApiTokenHeader}: <MAIL_API_TOKEN>"`;
+});
 
 const openApiCurlById = computed(() => {
   return `curl "${apiBaseUrl.value}/api/open/accounts/1/messages?mode=graph" \\

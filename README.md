@@ -233,6 +233,10 @@ npm run deploy
 
 以下接口**不需要后台登录 Cookie**，使用 token 鉴权即可：
 
+- `GET /api/open/accounts`
+  - 作用：获取账号列表（支持 `keyword` 查询）
+  - 适用：第三方平台读取账号总表或按关键词过滤
+  - 注意：返回数据包含敏感字段（如密码、refresh_token），请仅在受信任环境调用
 - `GET /api/open/accounts/:id/messages?mode=graph|imap`
   - 作用：按账号 ID 获取该账号全部邮件（Graph 或 IMAP 模式）
   - 适用：你已知道账号 ID 的场景
@@ -263,6 +267,10 @@ npm run deploy
 调用示例：
 
 ```bash
+# 获取账号列表（支持关键词）
+curl "https://your-domain/api/open/accounts?keyword=outlook" \
+  -H "x-mail-api-token: your_mail_api_token"
+
 # 通过账号ID取件
 curl "https://your-domain/api/open/accounts/1/messages?mode=graph" \
   -H "x-mail-api-token: your_mail_api_token"

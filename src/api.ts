@@ -152,5 +152,10 @@ export const api = {
         body: JSON.stringify({ remark })
       }
     );
+  },
+
+  openListAccounts(keyword?: string): Promise<{ items: AccountItem[] }> {
+    const query = keyword ? `?${new URLSearchParams({ keyword }).toString()}` : '';
+    return request<{ items: AccountItem[] }>(`/api/open/accounts${query}`);
   }
 };

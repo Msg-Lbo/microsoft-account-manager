@@ -218,23 +218,16 @@ app.post('/api/auth/logout', (c) => {
 
 app.get('/api/accounts', async (c) => {
   const keyword = (c.req.query('keyword') ?? '').trim();
-  let statement: D1PreparedStatement;
+  const items = await queryAccounts(c.env.DB, keyword);
+  return c.json({ items });
+});
 
-  if (keyword) {
-    const like = `%${keyword}%`;
-    statement = c.env.DB
-      .prepare(
-        `${ACCOUNT_SELECT_SQL}
-         WHERE account LIKE ? OR IFNULL(remark, '') LIKE ?
-         ORDER BY id DESC`
-      )
-      .bind(like, like);
-  } else {
-    statement = c.env.DB.prepare(`${ACCOUNT_SELECT_SQL} ORDER BY id DESC`);
-  }
+app.get('/api/open/accounts', async (c) => {
+  validateOpenApiToken(c, getMailApiToken(c.env));
 
-  const { results } = await statement.all<AccountRow>();
-  return c.json({ items: results ?? [] });
+  const keyword = (c.req.query('keyword') ?? '').trim();
+  const items = await queryAccounts(c.env.DB, keyword);
+  return c.json({ items });
 });
 
 app.post('/api/accounts', async (c) => {
@@ -822,6 +815,26 @@ function getScopeByMode(mode: MailFetchMode): string {
     return IMAP_SCOPE;
   }
   return GRAPH_SCOPE;
+}
+
+async function queryAccounts(db: D1Database, keyword: string): Promise<AccountRow[]> {
+  let statement: D1PreparedStatement;
+
+  if (keyword) {
+    const like = `%${keyword}%`;
+    statement = db
+      .prepare(
+        `${ACCOUNT_SELECT_SQL}
+         WHERE account LIKE ? OR IFNULL(remark, '') LIKE ?
+         ORDER BY id DESC`
+      )
+      .bind(like, like);
+  } else {
+    statement = db.prepare(`${ACCOUNT_SELECT_SQL} ORDER BY id DESC`);
+  }
+
+  const { results } = await statement.all<AccountRow>();
+  return results ?? [];
 }
 
 async function fetchAllAccounts(db: D1Database): Promise<AccountRow[]> {
@@ -1503,6 +1516,7 @@ function isPublicApiPath(pathname: string): boolean {
     pathname === '/api/auth/login' ||
     pathname === INGEST_PATH ||
     pathname === OPEN_MESSAGES_PATH ||
+    pathname === '/api/open/accounts' ||
     /^\/api\/open\/accounts\/\d+\/messages$/.test(pathname) ||
     /^\/api\/open\/accounts\/\d+\/remark$/.test(pathname)
   );
