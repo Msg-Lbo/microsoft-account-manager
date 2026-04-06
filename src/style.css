@@ -93,6 +93,30 @@ body {
   font-size: 0.86rem;
 }
 
+.hidden-file-input {
+  display: none;
+}
+
+.list-toolbar {
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.list-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.account-table .n-data-table-th,
+.account-table .n-data-table-td {
+  white-space: nowrap;
+}
+
 .action-cell {
   display: flex;
   gap: 4px;
@@ -154,5 +178,9 @@ body {
 
   .hero h1 {
     font-size: 1.36rem;
+  }
+
+  .list-toolbar {
+    flex-wrap: wrap;
   }
 }

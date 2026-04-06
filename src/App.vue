@@ -95,33 +95,50 @@
               placeholder="每行一个账号：账号----密码 或 账号----密码----client_id----refresh_token"
             />
             <template #footer>
-              <n-space justify="space-between" align="center">
-                <span class="hint">空行会自动忽略，重复账号记录会跳过。</span>
-                <n-button type="primary" secondary :loading="importLoading" @click="handleImport">
-                  导入账号
-                </n-button>
+              <n-space justify="space-between" align="center" wrap>
+                <span class="hint">支持手动输入或 TXT 文件导入，空行会自动忽略。</span>
+                <n-space>
+                  <input
+                    ref="txtFileInputRef"
+                    class="hidden-file-input"
+                    type="file"
+                    accept=".txt,text/plain"
+                    @change="handleTxtFileChange"
+                  />
+                  <n-button secondary :loading="importLoading" @click="triggerTxtImport">
+                    导入 TXT
+                  </n-button>
+                  <n-button type="primary" secondary :loading="importLoading" @click="handleImport">
+                    导入文本
+                  </n-button>
+                </n-space>
               </n-space>
             </template>
           </n-card>
 
           <n-card title="账号列表" size="small">
-            <n-space justify="space-between" align="center" style="margin-bottom: 12px">
-              <n-input
-                v-model:value="searchKeyword"
-                clearable
-                style="max-width: 340px"
-                placeholder="按账号或备注搜索"
-                @keyup.enter="loadAccounts"
-              />
+            <div class="list-toolbar">
+              <div class="list-toolbar-left">
+                <n-input
+                  v-model:value="searchKeyword"
+                  clearable
+                  style="max-width: 340px"
+                  placeholder="按账号或备注搜索"
+                  @keyup.enter="loadAccounts"
+                />
+                <n-tag type="info" size="small">共 {{ accounts.length }} 条</n-tag>
+              </div>
               <n-button :loading="tableLoading" @click="loadAccounts">刷新</n-button>
-            </n-space>
+            </div>
 
             <n-data-table
+              class="account-table"
               :columns="accountColumns"
               :data="accounts"
               :row-key="rowKey"
               :loading="tableLoading"
               :pagination="{ pageSize: 10 }"
+              :scroll-x="1320"
               max-height="520"
             />
           </n-card>
@@ -131,9 +148,6 @@
       <n-tab-pane name="ingest" tab="上传接口">
         <n-space vertical size="large">
           <n-card title="外部上传接口说明" size="small">
-            <n-alert type="info" show-icon>
-              把外部系统的账号数据 POST 到本系统，不再需要“本系统推送到外部”。
-            </n-alert>
             <div class="api-box">
               <p><strong>接口地址：</strong>{{ ingestEndpointUrl }}</p>
               <p><strong>请求方法：</strong>POST</p>
@@ -241,7 +255,6 @@
 <script setup lang="ts">
 import { computed, h, onMounted, reactive, ref } from 'vue';
 import {
-  NAlert,
   NButton,
   NCard,
   NCode,
@@ -289,6 +302,7 @@ const importLoading = ref(false);
 const saveIngestLoading = ref(false);
 
 const importText = ref('');
+const txtFileInputRef = ref<HTMLInputElement | null>(null);
 
 const createForm = reactive<Required<AccountPayload>>({
   account: '',
@@ -323,28 +337,30 @@ const ingestTokenHeader = ref('x-ingest-token');
 const rowKey = (row: AccountItem): number => row.id;
 
 const accountColumns: DataTableColumns<AccountItem> = [
-  { title: '账号', key: 'account', minWidth: 130 },
-  { title: '密码', key: 'password', minWidth: 130 },
+  { title: '账号', key: 'account', minWidth: 220, ellipsis: { tooltip: true } },
+  { title: '密码', key: 'password', minWidth: 170, ellipsis: { tooltip: true } },
   {
     title: 'Client ID',
     key: 'clientId',
-    minWidth: 150,
+    minWidth: 240,
+    ellipsis: { tooltip: true },
     render: (row) => row.clientId ?? '-'
   },
   {
     title: 'Refresh Token',
     key: 'refreshToken',
-    minWidth: 180,
+    minWidth: 220,
     ellipsis: { tooltip: true },
     render: (row) => row.refreshToken ?? '-'
   },
   {
     title: '备注',
     key: 'remark',
-    minWidth: 140,
+    minWidth: 130,
+    ellipsis: { tooltip: true },
     render: (row) => row.remark ?? '-'
   },
-  { title: '创建时间', key: 'createdAt', minWidth: 165 },
+  { title: '创建时间', key: 'createdAt', minWidth: 180, ellipsis: { tooltip: true } },
   {
     title: '操作',
     key: 'actions',
@@ -595,10 +611,29 @@ async function handleDeleteAccount(id: number): Promise<void> {
   }
 }
 
-async function handleImport(): Promise<void> {
-  const text = importText.value.trim();
+function triggerTxtImport(): void {
+  txtFileInputRef.value?.click();
+}
+
+async function handleTxtFileChange(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) {
+    return;
+  }
+
+  try {
+    const text = await file.text();
+    await importAccountsText(text, `TXT 文件 ${file.name}`);
+  } finally {
+    input.value = '';
+  }
+}
+
+async function importAccountsText(rawText: string, sourceLabel: string): Promise<void> {
+  const text = rawText.trim();
   if (!text) {
-    message.warning('请先输入导入内容');
+    message.warning(`${sourceLabel} 内容为空`);
     return;
   }
 
@@ -607,7 +642,7 @@ async function handleImport(): Promise<void> {
     const result = await api.importAccounts(text);
     await loadAccounts();
     importText.value = '';
-    message.success(`导入完成：新增 ${result.inserted}，跳过 ${result.skipped}`);
+    message.success(`${sourceLabel} 导入完成：新增 ${result.inserted}，跳过 ${result.skipped}`);
     if (result.errors.length > 0) {
       message.warning(`有 ${result.errors.length} 行格式错误，已跳过`);
     }
@@ -616,6 +651,10 @@ async function handleImport(): Promise<void> {
   } finally {
     importLoading.value = false;
   }
+}
+
+async function handleImport(): Promise<void> {
+  await importAccountsText(importText.value, '文本内容');
 }
 
 async function handleSaveIngestConfig(): Promise<void> {
