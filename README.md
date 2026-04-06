@@ -59,6 +59,7 @@ ADMIN_USERNAME=admin
 ADMIN_PASSWORD=your_password
 SESSION_SECRET=replace_with_long_random_secret
 INGEST_TOKEN=replace_with_upload_token
+MAIL_API_TOKEN=replace_with_mail_api_token
 ```
 
 ### 3) 初始化本地 D1
@@ -120,6 +121,7 @@ database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
 - `ADMIN_PASSWORD`：后台登录密码（必须）
 - `SESSION_SECRET`：会话签名密钥（必须）
 - `INGEST_TOKEN`：外部上传接口令牌（必须）
+- `MAIL_API_TOKEN`：开放取件接口令牌（推荐，未设置时会回退使用 `INGEST_TOKEN`）
 - `ADMIN_USERNAME`：后台用户名（可选，默认 `admin`）
 
 部署时 `prepare:cf-config` 会自动生成临时 `.wrangler.deploy.toml`，并注入以上变量到部署配置。
@@ -135,6 +137,7 @@ $env:D1_DATABASE_ID = "your-d1-database-id"
 $env:ADMIN_PASSWORD = "your-admin-password"
 $env:SESSION_SECRET = "your-session-secret"
 $env:INGEST_TOKEN = "your-ingest-token"
+$env:MAIL_API_TOKEN = "your-mail-api-token"
 $env:ADMIN_USERNAME = "admin"
 npm run deploy
 ```
@@ -190,8 +193,8 @@ npm run deploy
 
 用于“外部系统上传账号到本系统”。
 
-- 路径：`POST /api/upload/ingest`
-- 鉴权：
+- `POST /api/upload/ingest`：外部系统上传账号数据到本系统
+- 鉴权方式：
   - `x-ingest-token: <INGEST_TOKEN>`
   - 或 `Authorization: Bearer <INGEST_TOKEN>`
 
@@ -226,20 +229,64 @@ npm run deploy
 
 ---
 
-## 管理端 API（核心）
+## 开放取件 API（给其他平台调用）
 
-- `POST /api/auth/login`
-- `POST /api/auth/logout`
-- `GET /api/auth/me`
-- `GET /api/accounts`
-- `POST /api/accounts`
-- `PUT /api/accounts/:id`
-- `DELETE /api/accounts/:id`
-- `POST /api/accounts/import`
-- `POST /api/accounts/refresh`
-- `GET /api/accounts/:id/messages?mode=graph|imap`
-- `GET /api/ingest-config`
-- `PUT /api/ingest-config`
+以下接口**不需要后台登录 Cookie**，使用 token 鉴权即可：
+
+- `GET /api/open/accounts/:id/messages?mode=graph|imap`
+  - 作用：按账号 ID 获取该账号全部邮件（Graph 或 IMAP 模式）
+  - 适用：你已知道账号 ID 的场景
+- `POST /api/open/messages`
+  - 作用：按 `id` 或 `account` 获取该账号全部邮件
+  - 适用：第三方平台只知道邮箱地址时
+
+鉴权方式（任选其一）：
+
+- `x-mail-api-token: <MAIL_API_TOKEN>`
+- `x-api-token: <MAIL_API_TOKEN>`
+- `Authorization: Bearer <MAIL_API_TOKEN>`
+
+> 若未设置 `MAIL_API_TOKEN`，系统会回退使用 `INGEST_TOKEN`。
+
+`POST /api/open/messages` 请求体示例：
+
+```json
+{
+  "account": "example@outlook.com",
+  "mode": "graph"
+}
+```
+
+调用示例：
+
+```bash
+# 通过账号ID取件
+curl "https://your-domain/api/open/accounts/1/messages?mode=graph" \
+  -H "x-mail-api-token: your_mail_api_token"
+
+# 通过邮箱地址取件
+curl -X POST "https://your-domain/api/open/messages" \
+  -H "Content-Type: application/json" \
+  -H "x-mail-api-token: your_mail_api_token" \
+  -d '{"account":"example@outlook.com","mode":"imap"}'
+```
+
+---
+
+## 管理端 API（需登录）
+
+- `POST /api/auth/login`：后台管理员登录，返回会话 Cookie
+- `POST /api/auth/logout`：退出当前登录会话
+- `GET /api/auth/me`：获取当前登录用户信息
+- `GET /api/accounts`：获取账号列表（支持关键词查询）
+- `POST /api/accounts`：新增单个账号
+- `PUT /api/accounts/:id`：更新指定账号
+- `DELETE /api/accounts/:id`：删除指定账号
+- `POST /api/accounts/import`：批量导入账号文本
+- `POST /api/accounts/refresh`：批量刷新账号 refresh_token
+- `GET /api/accounts/:id/messages?mode=graph|imap`：按账号 ID 拉取全部邮件（管理端用）
+- `GET /api/ingest-config`：读取外部上传字段映射配置
+- `PUT /api/ingest-config`：更新外部上传字段映射配置
 
 `/api/accounts/refresh` 请求体示例：
 

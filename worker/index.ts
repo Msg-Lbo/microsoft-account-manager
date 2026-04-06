@@ -11,6 +11,7 @@ type Bindings = {
   ADMIN_PASSWORD?: string;
   SESSION_SECRET?: string;
   INGEST_TOKEN?: string;
+  MAIL_API_TOKEN?: string;
 };
 
 type Variables = {
@@ -106,7 +107,9 @@ interface TokenExchangeResult {
 const SESSION_COOKIE_NAME = 'am_session';
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24;
 const INGEST_TOKEN_HEADER = 'x-ingest-token';
+const MAIL_API_TOKEN_HEADER = 'x-mail-api-token';
 const INGEST_PATH = '/api/upload/ingest';
+const OPEN_MESSAGES_PATH = '/api/open/messages';
 const MICROSOFT_TOKEN_URL = 'https://login.microsoftonline.com/consumers/oauth2/v2.0/token';
 const GRAPH_MESSAGES_URL = 'https://graph.microsoft.com/v1.0/me/messages';
 const OUTLOOK_MESSAGES_URL = 'https://outlook.office.com/api/v2.0/me/messages';
@@ -437,6 +440,60 @@ app.get('/api/accounts/:id/messages', async (c) => {
   });
 });
 
+app.get('/api/open/accounts/:id/messages', async (c) => {
+  validateOpenApiToken(c, getMailApiToken(c.env));
+
+  const id = parseNumericId(c.req.param('id'));
+  const mode = parseMailFetchMode(c.req.query('mode'), 'graph');
+  const account = await fetchAccountById(c.env.DB, id);
+
+  if (!account) {
+    throw new HTTPException(404, { message: '账号不存在' });
+  }
+
+  const result = await fetchAccountMessages(c.env.DB, account, mode, true);
+  if (!result.ok) {
+    throw new HTTPException(400, { message: result.message });
+  }
+
+  return c.json({
+    accountId: account.id,
+    account: account.account,
+    mode,
+    messages: result.messages
+  });
+});
+
+app.post('/api/open/messages', async (c) => {
+  validateOpenApiToken(c, getMailApiToken(c.env));
+
+  const body = await readJson<{ id?: unknown; account?: unknown; mode?: unknown }>(c);
+  const mode = parseMailFetchMode(body.mode, 'graph');
+
+  const rawId = Number.parseInt(asText(body.id), 10);
+  const accountById = Number.isInteger(rawId) && rawId > 0 ? await fetchAccountById(c.env.DB, rawId) : null;
+
+  const accountText = asText(body.account).trim();
+  const accountByName = accountText ? await fetchAccountByAccount(c.env.DB, accountText) : null;
+
+  const account = accountById ?? accountByName;
+  if (!account) {
+    throw new HTTPException(400, { message: '请传入有效的 id 或 account' });
+  }
+
+  const result = await fetchAccountMessages(c.env.DB, account, mode, true);
+  if (!result.ok) {
+    throw new HTTPException(400, { message: result.message });
+  }
+
+  return c.json({
+    accountId: account.id,
+    account: account.account,
+    mode,
+    messages: result.messages
+  });
+});
+
 app.get('/api/ingest-config', async (c) => {
   const item = await getIngestConfig(c.env.DB);
   return c.json({
@@ -733,6 +790,14 @@ async function fetchAllAccounts(db: D1Database): Promise<AccountRow[]> {
 
 async function fetchAccountById(db: D1Database, id: number): Promise<AccountRow | null> {
   const row = await db.prepare(`${ACCOUNT_SELECT_SQL} WHERE id = ?`).bind(id).first<AccountRow>();
+  return row ?? null;
+}
+
+async function fetchAccountByAccount(db: D1Database, account: string): Promise<AccountRow | null> {
+  const row = await db
+    .prepare(`${ACCOUNT_SELECT_SQL} WHERE account = ? ORDER BY id DESC LIMIT 1`)
+    .bind(account)
+    .first<AccountRow>();
   return row ?? null;
 }
 
@@ -1384,7 +1449,13 @@ function truncate(input: string, limit: number): string {
 }
 
 function isPublicApiPath(pathname: string): boolean {
-  return pathname === '/api/health' || pathname === '/api/auth/login' || pathname === INGEST_PATH;
+  return (
+    pathname === '/api/health' ||
+    pathname === '/api/auth/login' ||
+    pathname === INGEST_PATH ||
+    pathname === OPEN_MESSAGES_PATH ||
+    /^\/api\/open\/accounts\/\d+\/messages$/.test(pathname)
+  );
 }
 
 async function authenticateRequest(c: Context<{ Bindings: Bindings; Variables: Variables }>): Promise<string | null> {
@@ -1436,6 +1507,17 @@ function getIngestToken(env: Bindings): string {
   return token;
 }
 
+function getMailApiToken(env: Bindings): string {
+  const token = asText(env.MAIL_API_TOKEN || env.INGEST_TOKEN).trim();
+  if (!token) {
+    throw new HTTPException(500, {
+      message:
+        '服务端未配置 MAIL_API_TOKEN（或可复用 INGEST_TOKEN），请执行 wrangler secret put MAIL_API_TOKEN'
+    });
+  }
+  return token;
+}
+
 function readIngestToken(c: Context<{ Bindings: Bindings; Variables: Variables }>): string {
   const headerToken = asText(c.req.header(INGEST_TOKEN_HEADER)).trim();
   if (headerToken) {
@@ -1448,6 +1530,40 @@ function readIngestToken(c: Context<{ Bindings: Bindings; Variables: Variables }
   }
 
   return asText(c.req.query('token')).trim();
+}
+
+function readOpenApiToken(c: Context<{ Bindings: Bindings; Variables: Variables }>): string {
+  const mailHeaderToken = asText(c.req.header(MAIL_API_TOKEN_HEADER)).trim();
+  if (mailHeaderToken) {
+    return mailHeaderToken;
+  }
+
+  const apiToken = asText(c.req.header('x-api-token')).trim();
+  if (apiToken) {
+    return apiToken;
+  }
+
+  const ingestHeaderToken = asText(c.req.header(INGEST_TOKEN_HEADER)).trim();
+  if (ingestHeaderToken) {
+    return ingestHeaderToken;
+  }
+
+  const authHeader = asText(c.req.header('authorization')).trim();
+  if (authHeader.toLowerCase().startsWith('bearer ')) {
+    return authHeader.slice(7).trim();
+  }
+
+  return asText(c.req.query('token')).trim();
+}
+
+function validateOpenApiToken(
+  c: Context<{ Bindings: Bindings; Variables: Variables }>,
+  expectedToken: string
+): void {
+  const receivedToken = readOpenApiToken(c);
+  if (!receivedToken || !timingSafeEqual(receivedToken, expectedToken)) {
+    throw new HTTPException(401, { message: '开放接口令牌无效' });
+  }
 }
 
 async function createSessionToken(username: string, secret: string): Promise<string> {

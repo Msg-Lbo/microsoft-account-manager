@@ -4,7 +4,13 @@ import path from 'node:path';
 const SOURCE_FILE = 'wrangler.toml';
 const OUTPUT_FILE = '.wrangler.deploy.toml';
 const PLACEHOLDER_ID = 'REPLACE_WITH_YOUR_D1_DATABASE_ID';
-const RUNTIME_ENV_KEYS = ['ADMIN_USERNAME', 'ADMIN_PASSWORD', 'SESSION_SECRET', 'INGEST_TOKEN'];
+const RUNTIME_ENV_KEYS = [
+  'ADMIN_USERNAME',
+  'ADMIN_PASSWORD',
+  'SESSION_SECRET',
+  'INGEST_TOKEN',
+  'MAIL_API_TOKEN'
+];
 
 const sourcePath = path.resolve(process.cwd(), SOURCE_FILE);
 const outputPath = path.resolve(process.cwd(), OUTPUT_FILE);
