@@ -8,13 +8,15 @@
     "dev:worker": "wrangler dev --local",
     "build": "vite build",
     "typecheck": "vue-tsc --noEmit && tsc -p tsconfig.worker.json --noEmit",
-    "migrate:remote": "wrangler d1 migrations apply account_manager_db --remote",
-    "deploy:cf": "npm run migrate:remote && wrangler deploy",
+    "prepare:cf-config": "node scripts/prepare-wrangler-config.mjs",
+    "migrate:local": "wrangler d1 migrations apply account_manager_db --local",
+    "migrate:remote": "npm run prepare:cf-config && wrangler d1 migrations apply account_manager_db --remote --config .wrangler.deploy.toml",
+    "deploy:cf": "npm run migrate:remote && wrangler deploy --config .wrangler.deploy.toml",
     "deploy": "npm run build && npm run deploy:cf"
   },
   "dependencies": {
     "hono": "^4.8.2",
-    "katex": "^0.16.11",
+    "katex": "^0.16.45",
     "naive-ui": "^2.40.3",
     "vue": "^3.5.13"
   },

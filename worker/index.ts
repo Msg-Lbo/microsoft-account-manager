@@ -113,8 +113,7 @@ const OUTLOOK_MESSAGES_URL = 'https://outlook.office.com/api/v2.0/me/messages';
 const GRAPH_SCOPE = 'https://graph.microsoft.com/.default';
 const IMAP_SCOPE = 'https://outlook.office.com/IMAP.AccessAsUser.All offline_access';
 const DEFAULT_REFRESH_CONCURRENCY = 8;
-const DEFAULT_FETCH_CONCURRENCY = 6;
-const DEFAULT_FETCH_TOP = 3;
+const MAIL_PAGE_SIZE = 100;
 
 const DEFAULT_INGEST_CONFIG: IngestConfig = {
   delimiter: '----',
@@ -393,9 +392,8 @@ app.post('/api/accounts/import', async (c) => {
 });
 
 app.post('/api/accounts/refresh', async (c) => {
-  const body = await readJson<{ accountIds?: unknown; concurrency?: unknown }>(c);
+  const body = await readJson<{ accountIds?: unknown }>(c);
   const accountIds = parseAccountIds(body.accountIds);
-  const concurrency = clampInteger(body.concurrency, 1, 20, DEFAULT_REFRESH_CONCURRENCY);
   const accounts =
     accountIds.length > 0
       ? await fetchAccountsByIds(c.env.DB, accountIds)
@@ -405,35 +403,8 @@ app.post('/api/accounts/refresh', async (c) => {
     throw new HTTPException(400, { message: '没有可刷新的账号' });
   }
 
-  const details = await mapWithConcurrency(accounts, concurrency, (account) =>
+  const details = await mapWithConcurrency(accounts, DEFAULT_REFRESH_CONCURRENCY, (account) =>
     refreshAccountToken(c.env.DB, account)
-  );
-  const success = details.filter((item) => item.ok).length;
-  return c.json({
-    total: details.length,
-    success,
-    failure: details.length - success,
-    details
-  });
-});
-
-app.post('/api/accounts/fetch', async (c) => {
-  const body = await readJson<{ accountIds?: unknown; concurrency?: unknown; top?: unknown; mode?: unknown }>(c);
-  const accountIds = parseAccountIds(body.accountIds);
-  const concurrency = clampInteger(body.concurrency, 1, 20, DEFAULT_FETCH_CONCURRENCY);
-  const top = clampInteger(body.top, 1, 20, DEFAULT_FETCH_TOP);
-  const mode = parseMailFetchMode(body.mode, 'graph');
-  const accounts =
-    accountIds.length > 0
-      ? await fetchAccountsByIds(c.env.DB, accountIds)
-      : await fetchAllAccounts(c.env.DB);
-
-  if (accounts.length === 0) {
-    throw new HTTPException(400, { message: '没有可取件的账号' });
-  }
-
-  const details = await mapWithConcurrency(accounts, concurrency, (account) =>
-    fetchAccountMails(c.env.DB, account, top, mode)
   );
   const success = details.filter((item) => item.ok).length;
   return c.json({
@@ -453,7 +424,7 @@ app.get('/api/accounts/:id/messages', async (c) => {
     throw new HTTPException(404, { message: '账号不存在' });
   }
 
-  const result = await fetchAccountMessages(c.env.DB, account, null, mode, true);
+  const result = await fetchAccountMessages(c.env.DB, account, mode, true);
   if (!result.ok) {
     throw new HTTPException(400, { message: result.message });
   }
@@ -740,21 +711,6 @@ function parseAccountIds(input: unknown): number[] {
   return Array.from(new Set(ids));
 }
 
-function clampInteger(value: unknown, min: number, max: number, fallback: number): number {
-  const parsed = Number.parseInt(asText(value), 10);
-  if (!Number.isFinite(parsed)) {
-    return fallback;
-  }
-
-  if (parsed < min) {
-    return min;
-  }
-  if (parsed > max) {
-    return max;
-  }
-  return parsed;
-}
-
 function parseMailFetchMode(value: unknown, fallback: MailFetchMode): MailFetchMode {
   const mode = asText(value).trim().toLowerCase();
   if (mode === 'imap' || mode === 'graph') {
@@ -854,26 +810,9 @@ async function refreshAccountToken(db: D1Database, account: AccountRow): Promise
   };
 }
 
-async function fetchAccountMails(
-  db: D1Database,
-  account: AccountRow,
-  top: number,
-  mode: MailFetchMode
-): Promise<BatchActionDetail> {
-  const result = await fetchAccountMessages(db, account, top, mode, false);
-  return {
-    id: account.id,
-    account: account.account,
-    ok: result.ok,
-    message: result.message,
-    fetchedCount: result.fetchedCount
-  };
-}
-
 async function fetchAccountMessages(
   db: D1Database,
   account: AccountRow,
-  top: number | null,
   mode: MailFetchMode,
   includeBody = true
 ): Promise<FetchActionResult> {
@@ -925,8 +864,8 @@ async function fetchAccountMessages(
 
   const fetched =
     mode === 'imap'
-      ? await readImapMessagesViaOutlookApi(tokenResult.accessToken, top, includeBody)
-      : await readGraphMessages(tokenResult.accessToken, top, includeBody);
+      ? await readImapMessagesViaOutlookApi(tokenResult.accessToken, includeBody)
+      : await readGraphMessages(tokenResult.accessToken, includeBody);
   if (!fetched.ok) {
     const message = fetched.error || `${mode.toUpperCase()}取件失败`;
     await updateSyncStatus(db, account.id, {
@@ -1018,16 +957,14 @@ async function exchangeMicrosoftToken(
 
 async function readGraphMessages(
   accessToken: string,
-  top: number | null,
   includeBody = false
 ): Promise<{ ok: true; messages: AccountMailItem[] } | { ok: false; error: string }> {
-  const pageSize = top === null ? 100 : top;
   const select = includeBody
     ? 'id,subject,from,receivedDateTime,bodyPreview,body'
     : 'id,subject,from,receivedDateTime,bodyPreview';
 
   const firstUrl = new URL(GRAPH_MESSAGES_URL);
-  firstUrl.searchParams.set('$top', String(pageSize));
+  firstUrl.searchParams.set('$top', String(MAIL_PAGE_SIZE));
   firstUrl.searchParams.set('$orderby', 'receivedDateTime desc');
   firstUrl.searchParams.set('$select', select);
 
@@ -1071,11 +1008,6 @@ async function readGraphMessages(
         .map((item) => normalizeGraphMailItem(item as Record<string, unknown>, includeBody))
     );
 
-    if (top !== null) {
-      nextUrl = null;
-      continue;
-    }
-
     const nextLink = asText((payload as Record<string, unknown>)['@odata.nextLink']).trim();
     nextUrl = nextLink || null;
   }
@@ -1088,16 +1020,14 @@ async function readGraphMessages(
 
 async function readImapMessagesViaOutlookApi(
   accessToken: string,
-  top: number | null,
   includeBody = false
 ): Promise<{ ok: true; messages: AccountMailItem[] } | { ok: false; error: string }> {
-  const pageSize = top === null ? 100 : top;
   const select = includeBody
     ? 'Id,Subject,From,DateTimeReceived,BodyPreview,Body'
     : 'Id,Subject,From,DateTimeReceived,BodyPreview';
 
   const firstUrl = new URL(OUTLOOK_MESSAGES_URL);
-  firstUrl.searchParams.set('$top', String(pageSize));
+  firstUrl.searchParams.set('$top', String(MAIL_PAGE_SIZE));
   firstUrl.searchParams.set('$orderby', 'DateTimeReceived desc');
   firstUrl.searchParams.set('$select', select);
 
@@ -1140,11 +1070,6 @@ async function readImapMessagesViaOutlookApi(
         .filter((item) => !!item && typeof item === 'object')
         .map((item) => normalizeOutlookMailItem(item as Record<string, unknown>, includeBody))
     );
-
-    if (top !== null) {
-      nextUrl = null;
-      continue;
-    }
 
     const nextLink = asText((payload as Record<string, unknown>)['@odata.nextLink']).trim();
     const fallbackNextLink = asText((payload as Record<string, unknown>)['odata.nextLink']).trim();

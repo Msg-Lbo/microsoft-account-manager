@@ -1,30 +1,58 @@
-# Cloudflare 账号管理服务
+# Microsoft Account Manager
 
-这是一个可部署到 Cloudflare Workers 的账号管理 Web 服务，前端使用 Vue 3 + Naive UI，后端使用 Hono + D1。
+一个部署在 **Cloudflare Workers** 的微软账号管理系统，支持账号存储、批量导入、令牌刷新、以及按账号查看邮件（Graph / IMAP 模式）。
 
-## 功能
+前端：Vue 3 + Naive UI  
+后端：Hono + D1
 
-- 账号增删改查（账号、密码、client_id、refresh_token、备注）
-- 后台登录鉴权（HttpOnly Cookie 会话）
-- 内置 JS 批量刷新令牌与批量取件（Graph API）
-- 账号列表状态列展示刷新/取件结果
-- 点击账号即可弹出邮件模态框（左侧邮件列表，右侧邮件内容）
-- 账号列表支持调整每页展示数量
-- 支持外部系统上传账号到本服务：`POST /api/upload/ingest`
-- 支持两种上传数据格式：
-  - `captchaurn` 行格式（如 `账号----密码----client_id----refresh_token`）
-  - 字段映射格式（如 `{ "a":"...", "p":"...", "c":"...", "t":"..." }`）
-- 后台可配置分隔符和字段映射
+---
+
+## 功能概览
+
+- 账号增删改查：`account / password / client_id / refresh_token / remark`
+- 批量导入：支持文本粘贴与 `.txt` 文件导入
+- 状态列：展示每个账号最近刷新/取件状态
+- 批量刷新：支持“刷新选中”与“刷新全部”
+- 邮件查看：点击账号直接弹出邮件窗口（左侧邮件列表，右侧邮件内容）
+- 取件模式：支持 `Graph` 与 `IMAP` 两种模式
+- 外部上传接口：支持 token 鉴权上传账号
+- 管理后台登录：基于 HttpOnly Cookie 会话
+
+---
+
+## 项目结构
+
+```text
+.
+├─ src/                     # 前端
+├─ worker/index.ts          # Worker API
+├─ migrations/              # D1 迁移
+├─ wrangler.toml            # Cloudflare 配置
+└─ README.md
+```
+
+---
+
+## 前置要求
+
+- Node.js 18+
+- npm
+- Wrangler CLI（已在依赖内）
+- Cloudflare 账号（用于线上部署）
+
+---
 
 ## 本地开发
 
-1. 安装依赖：
+### 1) 安装依赖
 
 ```bash
 npm install
 ```
 
-2. 新建 `.dev.vars`（供 `wrangler dev` 使用）：
+### 2) 准备本地环境变量
+
+在项目根目录创建 `.dev.vars`：
 
 ```env
 ADMIN_USERNAME=admin
@@ -33,31 +61,60 @@ SESSION_SECRET=replace_with_long_random_secret
 INGEST_TOKEN=replace_with_upload_token
 ```
 
-3. 启动 Worker API：
+### 3) 初始化本地 D1
+
+首次本地运行建议执行：
+
+```bash
+npm run migrate:local
+```
+
+### 4) 启动服务
+
+终端 1：
 
 ```bash
 npm run dev:worker
 ```
 
-4. 启动前端：
+终端 2：
 
 ```bash
 npm run dev
 ```
 
-`vite.config.ts` 已将 `/api` 代理到 `http://127.0.0.1:8787`。
+Vite 已代理 `/api` 到 `http://127.0.0.1:8787`。
+
+---
 
 ## 部署到 Cloudflare
 
-1. 创建 D1 数据库：
+### 1) 创建 D1
 
 ```bash
 wrangler d1 create account_manager_db
 ```
 
-2. 把返回的 `database_id` 填入 `wrangler.toml` 的 `[[d1_databases]]`。
+创建后会返回一个 `database_id`，例如：`7c6500bb-xxxx-xxxx-xxxx-xxxxxxxxxxxx`。
 
-3. 设置 Secrets：
+本项目默认把 `wrangler.toml` 中的 `database_id` 留作占位符，避免开源仓库泄露真实配置：
+
+```toml
+[[d1_databases]]
+binding = "DB"
+database_name = "account_manager_db"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+```
+
+### 2) 设置部署变量（推荐）
+
+在 Cloudflare 项目里新增环境变量（非 Secret）：
+
+- `D1_DATABASE_ID` = 你的真实 database_id
+
+部署时脚本会自动生成临时配置 `.wrangler.deploy.toml`，并替换占位符。
+
+### 3) 配置 Secrets
 
 ```bash
 wrangler secret put ADMIN_PASSWORD
@@ -65,29 +122,77 @@ wrangler secret put SESSION_SECRET
 wrangler secret put INGEST_TOKEN
 ```
 
-4. 构建并部署（会自动先跑远程迁移）：
+### 4) 迁移 + 部署
 
 ```bash
 npm run deploy
 ```
 
-其中：
+脚本说明：
 
-- `npm run migrate:remote`：仅执行 D1 远程迁移
-- `npm run deploy:cf`：执行迁移 + `wrangler deploy`（不重复构建）
+- `npm run prepare:cf-config`：根据 `D1_DATABASE_ID` 生成 `.wrangler.deploy.toml`
+- `npm run migrate:local`：执行本地 D1 迁移
+- `npm run migrate:remote`：执行远程 D1 迁移
+- `npm run deploy:cf`：迁移 + wrangler deploy
+- `npm run deploy`：先构建前端，再执行 deploy:cf
 
-如果你使用 Cloudflare 网页里的构建配置，推荐：
+如果用 Cloudflare 页面构建：
 
 - 构建命令：`npm run build`
 - 部署命令：`npm run deploy:cf`
 
+如果你在本地 CLI 手动部署，也可以先设置环境变量再执行：
+
+PowerShell:
+
+```powershell
+$env:D1_DATABASE_ID = "your-d1-database-id"
+npm run deploy
+```
+
+---
+
+## 账号导入格式
+
+每行一条，默认分隔符 `----`：
+
+```text
+账号----密码
+账号----密码----client_id----refresh_token
+```
+
+空行会自动忽略，重复记录会跳过。
+
+---
+
+## 邮件取件说明（管理后台）
+
+- 在账号列表顶部可切换取件模式：`Graph / IMAP`
+- 点击任意账号邮箱，会自动拉取该账号**全部邮件**并弹窗展示
+- 弹窗左侧邮件列表，右侧邮件正文
+- 每次取件会同步更新该账号状态列
+- 受 Workers 运行环境限制，`IMAP` 模式使用 Outlook OAuth 接口做兼容读取，不是原生 TCP IMAP 直连
+
+状态列含义：
+
+- `未处理`
+- `刷新成功`
+- `刷新失败`
+- `取件成功(n)`
+- `取件失败`
+
+---
+
 ## 外部上传接口
 
-- 路径：`/api/upload/ingest`
-- 方法：`POST`
-- 鉴权：请求头 `x-ingest-token: <INGEST_TOKEN>`（也支持 `Authorization: Bearer <INGEST_TOKEN>`）
+用于“外部系统上传账号到本系统”。
 
-### 示例 1：captchaurn
+- 路径：`POST /api/upload/ingest`
+- 鉴权：
+  - `x-ingest-token: <INGEST_TOKEN>`
+  - 或 `Authorization: Bearer <INGEST_TOKEN>`
+
+### 示例 1（captchaurn）
 
 ```json
 {
@@ -95,7 +200,7 @@ npm run deploy
 }
 ```
 
-### 示例 2：字段映射
+### 示例 2（字段映射）
 
 ```json
 {
@@ -116,48 +221,56 @@ npm run deploy
 }
 ```
 
-## 批量刷新与取件（内置 API）
+---
 
-后台管理端提供以下接口（需登录 Cookie）：
+## 管理端 API（核心）
 
-- `POST /api/accounts/refresh`：批量刷新 refresh_token
-- `POST /api/accounts/fetch`：批量取件（Graph API）
-- `GET /api/accounts/:id/messages?mode=graph|imap`：按账号获取全部邮件（用于前端邮件模态框）
+- `POST /api/auth/login`
+- `POST /api/auth/logout`
+- `GET /api/auth/me`
+- `GET /api/accounts`
+- `POST /api/accounts`
+- `PUT /api/accounts/:id`
+- `DELETE /api/accounts/:id`
+- `POST /api/accounts/import`
+- `POST /api/accounts/refresh`
+- `GET /api/accounts/:id/messages?mode=graph|imap`
+- `GET /api/ingest-config`
+- `PUT /api/ingest-config`
 
-请求体示例：
-
-```json
-{
-  "accountIds": [1, 2, 3],
-  "concurrency": 8,
-  "top": 3
-}
-```
-
-说明：
-
-- `accountIds` 不传则默认处理全部账号
-- `concurrency` 并发范围 1-20
-- `top` 取件数量范围 1-20（仅取件接口使用）
-- `mode` 支持 `graph` 和 `imap`
-
-返回示例：
+`/api/accounts/refresh` 请求体示例：
 
 ```json
 {
-  "total": 2,
-  "success": 1,
-  "failure": 1,
-  "details": [
-    { "id": 1, "account": "a@example.com", "ok": true, "message": "刷新成功" },
-    { "id": 2, "account": "b@example.com", "ok": false, "message": "缺少 client_id 或 refresh_token" }
-  ]
+  "accountIds": [1, 2, 3]
 }
 ```
 
-## 目录结构
+> 不传 `accountIds` 时，默认刷新全部账号。
 
-- `src/` 前端页面（Naive UI）
-- `worker/index.ts` Worker API 与静态资源入口
-- `migrations/` D1 迁移 SQL
-- `wrangler.toml` Cloudflare 配置
+---
+
+## 开源前建议
+
+- 确保 `wrangler.toml` 中不包含真实 `database_id`
+- 不要提交任何账号、token、cookie、`.env` / `.dev.vars`
+- 首次部署后建议尽快更换 `INGEST_TOKEN`
+
+---
+
+## 常见问题
+
+### 1) 接口 500
+
+通常是：
+
+- 缺少 secrets（`ADMIN_PASSWORD` / `SESSION_SECRET` / `INGEST_TOKEN`）
+- D1 迁移未执行
+
+### 2) 登录后访问失败
+
+先确认 Worker 绑定的域名、`SESSION_SECRET` 是否正确配置，并重新部署。
+
+### 3) 取件慢
+
+当前是“点击账号拉取全部邮件”，邮件较多时响应会变慢，属于预期行为。

@@ -902,8 +902,7 @@ async function handleRefreshAccounts(all: boolean): Promise<void> {
   syncLoading.value = true;
   try {
     const result = await api.refreshAccounts({
-      accountIds: all ? undefined : accountIds,
-      concurrency: 8
+      accountIds: all ? undefined : accountIds
     });
     await loadAccounts();
     showBatchResult('刷新', result);

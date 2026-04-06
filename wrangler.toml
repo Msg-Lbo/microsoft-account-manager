@@ -11,7 +11,7 @@ ADMIN_USERNAME = "admin"
 [[d1_databases]]
 binding = "DB"
 database_name = "account_manager_db"
-database_id = "7c6500bb-37c1-4a0c-9586-1b1563cddec2"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
 
 [observability]
 enabled = true

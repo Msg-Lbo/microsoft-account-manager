@@ -115,19 +115,8 @@ export const api = {
     });
   },
 
-  refreshAccounts(payload?: { accountIds?: number[]; concurrency?: number }): Promise<BatchActionResult> {
+  refreshAccounts(payload?: { accountIds?: number[] }): Promise<BatchActionResult> {
     return request<BatchActionResult>('/api/accounts/refresh', {
-      method: 'POST',
-      body: JSON.stringify(payload ?? {})
-    });
-  },
-
-  fetchAccounts(payload?: {
-    accountIds?: number[];
-    top?: number;
-    concurrency?: number;
-  }): Promise<BatchActionResult> {
-    return request<BatchActionResult>('/api/accounts/fetch', {
       method: 'POST',
       body: JSON.stringify(payload ?? {})
     });
