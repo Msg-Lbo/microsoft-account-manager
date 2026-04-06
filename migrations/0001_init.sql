@@ -19,6 +19,6 @@ CREATE TABLE IF NOT EXISTS app_settings (
 
 INSERT OR IGNORE INTO app_settings (key, value)
 VALUES (
-  'upload_config',
-  '{"url":"","method":"POST","contentType":"application/json","headers":"{}","template":"{\"a\":\"_account_\",\"p\":\"_password_\"}","retryCount":2,"concurrency":3,"retryDelayMs":600}'
+  'ingest_config',
+  '{"delimiter":"----","captchaField":"data","accountField":"a","passwordField":"p","clientIdField":"c","tokenField":"t"}'
 );

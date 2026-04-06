@@ -98,8 +98,19 @@ body {
   gap: 4px;
 }
 
-.upload-result {
-  margin-top: 8px;
+.api-box {
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 10px;
+  background: rgba(22, 52, 71, 0.06);
+}
+
+.api-box p {
+  margin: 0;
+}
+
+.api-box p + p {
+  margin-top: 6px;
 }
 
 .n-card {

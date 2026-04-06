@@ -36,9 +36,7 @@
       <div>
         <p class="hero-badge">Cloudflare Worker + D1</p>
         <h1>账号管理与上传中心</h1>
-        <p>
-          管理账号、批量导入、配置上传模板，并按你给定的占位符格式发送到目标接口。
-        </p>
+        <p>支持外部系统直接上传账号到本服务，并在后台统一管理。</p>
       </div>
       <n-space align="center" class="hero-actions">
         <n-tag type="success" size="small">已登录：{{ currentUser }}</n-tag>
@@ -98,7 +96,7 @@
             />
             <template #footer>
               <n-space justify="space-between" align="center">
-                <span class="hint">支持你截图里的占位格式，空行会自动忽略。</span>
+                <span class="hint">空行会自动忽略，重复账号记录会跳过。</span>
                 <n-button type="primary" secondary :loading="importLoading" @click="handleImport">
                   导入账号
                 </n-button>
@@ -115,10 +113,7 @@
                 placeholder="按账号或备注搜索"
                 @keyup.enter="loadAccounts"
               />
-              <n-space>
-                <n-tag type="info" size="small">已选 {{ checkedRowKeys.length }} 条</n-tag>
-                <n-button :loading="tableLoading" @click="loadAccounts">刷新</n-button>
-              </n-space>
+              <n-button :loading="tableLoading" @click="loadAccounts">刷新</n-button>
             </n-space>
 
             <n-data-table
@@ -126,150 +121,78 @@
               :data="accounts"
               :row-key="rowKey"
               :loading="tableLoading"
-              :checked-row-keys="checkedRowKeys"
               :pagination="{ pageSize: 10 }"
               max-height="520"
-              @update:checked-row-keys="handleCheckedRowKeysUpdate"
             />
           </n-card>
         </n-space>
       </n-tab-pane>
 
-      <n-tab-pane name="upload" tab="上传配置">
+      <n-tab-pane name="ingest" tab="上传接口">
         <n-space vertical size="large">
-          <n-card title="上传接口配置" size="small">
+          <n-card title="外部上传接口说明" size="small">
+            <n-alert type="info" show-icon>
+              把外部系统的账号数据 POST 到本系统，不再需要“本系统推送到外部”。
+            </n-alert>
+            <div class="api-box">
+              <p><strong>接口地址：</strong>{{ ingestEndpointUrl }}</p>
+              <p><strong>请求方法：</strong>POST</p>
+              <p><strong>Content-Type：</strong>application/json 或 text/plain</p>
+              <p><strong>鉴权头：</strong>{{ ingestTokenHeader }}: &lt;INGEST_TOKEN&gt;</p>
+            </div>
+          </n-card>
+
+          <n-card title="上传字段映射配置" size="small">
             <n-form label-placement="top">
               <n-grid :x-gap="12" :y-gap="12" :cols="24">
-                <n-gi :span="24">
-                  <n-form-item label="上传 URL">
-                    <n-input
-                      v-model:value="uploadConfig.url"
-                      placeholder="例如：https://api.example.com/upload"
-                    />
+                <n-gi :span="8">
+                  <n-form-item label="分隔符">
+                    <n-input v-model:value="ingestConfig.delimiter" placeholder="----" />
                   </n-form-item>
                 </n-gi>
                 <n-gi :span="8">
-                  <n-form-item label="请求方法">
-                    <n-select
-                      v-model:value="uploadConfig.method"
-                      :options="methodOptions"
-                      placeholder="选择请求方法"
-                    />
-                  </n-form-item>
-                </n-gi>
-                <n-gi :span="16">
-                  <n-form-item label="Content-Type">
-                    <n-input
-                      v-model:value="uploadConfig.contentType"
-                      placeholder="application/json"
-                    />
+                  <n-form-item label="captcha 行字段名">
+                    <n-input v-model:value="ingestConfig.captchaField" placeholder="data" />
                   </n-form-item>
                 </n-gi>
                 <n-gi :span="8">
-                  <n-form-item label="并发数（1-10）">
-                    <n-input-number
-                      style="width: 100%"
-                      :value="uploadConfig.concurrency"
-                      :min="1"
-                      :max="10"
-                      :precision="0"
-                      @update:value="updateConcurrency"
-                    />
+                  <n-form-item label="账号字段名">
+                    <n-input v-model:value="ingestConfig.accountField" placeholder="a" />
                   </n-form-item>
                 </n-gi>
                 <n-gi :span="8">
-                  <n-form-item label="重试次数（0-5）">
-                    <n-input-number
-                      style="width: 100%"
-                      :value="uploadConfig.retryCount"
-                      :min="0"
-                      :max="5"
-                      :precision="0"
-                      @update:value="updateRetryCount"
-                    />
+                  <n-form-item label="密码字段名">
+                    <n-input v-model:value="ingestConfig.passwordField" placeholder="p" />
                   </n-form-item>
                 </n-gi>
                 <n-gi :span="8">
-                  <n-form-item label="重试间隔（ms）">
-                    <n-input-number
-                      style="width: 100%"
-                      :value="uploadConfig.retryDelayMs"
-                      :min="0"
-                      :max="10000"
-                      :precision="0"
-                      @update:value="updateRetryDelay"
-                    />
+                  <n-form-item label="client_id 字段名">
+                    <n-input v-model:value="ingestConfig.clientIdField" placeholder="c" />
                   </n-form-item>
                 </n-gi>
-                <n-gi :span="24">
-                  <n-form-item label="请求头（JSON 格式，可留空）">
-                    <n-input
-                      v-model:value="uploadConfig.headers"
-                      type="textarea"
-                      :autosize="{ minRows: 4, maxRows: 8 }"
-                      placeholder='例如：{"Authorization":"Bearer token123"}'
-                    />
-                  </n-form-item>
-                </n-gi>
-                <n-gi :span="24">
-                  <n-form-item label="数据模板（JSON 格式）">
-                    <n-input
-                      v-model:value="uploadConfig.template"
-                      type="textarea"
-                      :autosize="{ minRows: 6, maxRows: 12 }"
-                    />
+                <n-gi :span="8">
+                  <n-form-item label="refresh_token 字段名">
+                    <n-input v-model:value="ingestConfig.tokenField" placeholder="t" />
                   </n-form-item>
                 </n-gi>
               </n-grid>
             </n-form>
-
             <n-space justify="end">
-              <n-button type="primary" :loading="saveConfigLoading" @click="handleSaveUploadConfig">
-                保存上传配置
+              <n-button type="primary" :loading="saveIngestLoading" @click="handleSaveIngestConfig">
+                保存映射配置
               </n-button>
             </n-space>
           </n-card>
 
-          <n-card title="占位符说明" size="small">
-            <n-code :code="placeholderDoc" language="json" word-wrap />
-          </n-card>
-
-          <n-card title="执行上传" size="small">
-            <n-space justify="space-between" align="center" wrap>
-              <div>
-                <p class="hint">已勾选账号：{{ checkedRowKeys.length }} 条</p>
-                <p class="hint">上传选中时只上传勾选行；上传全部时忽略勾选状态。</p>
-                <p class="hint">
-                  当前策略：并发 {{ uploadConfig.concurrency }}，重试 {{ uploadConfig.retryCount }} 次，间隔
-                  {{ uploadConfig.retryDelayMs }}ms。
-                </p>
-              </div>
-              <n-space>
-                <n-button :loading="uploadLoading" @click="handleExecuteUpload(false)">
-                  上传选中账号
-                </n-button>
-                <n-button type="primary" :loading="uploadLoading" @click="handleExecuteUpload(true)">
-                  上传全部账号
-                </n-button>
-              </n-space>
+          <n-card title="请求示例" size="small">
+            <n-space vertical>
+              <p class="hint">示例 1（captchaurn 格式）：</p>
+              <n-code :code="captchaPayloadExample" language="json" word-wrap />
+              <p class="hint">示例 2（字段映射格式）：</p>
+              <n-code :code="mappedPayloadExample" language="json" word-wrap />
+              <p class="hint">curl 示例：</p>
+              <n-code :code="curlExample" language="bash" word-wrap />
             </n-space>
-
-            <n-divider />
-
-            <n-empty v-if="!uploadResult" description="暂无上传记录" />
-            <div v-else class="upload-result">
-              <n-alert :type="uploadResult.failure === 0 ? 'success' : 'warning'" show-icon>
-                本次上传 {{ uploadResult.total }} 条，成功 {{ uploadResult.success }} 条，失败
-                {{ uploadResult.failure }} 条。
-              </n-alert>
-              <n-data-table
-                :columns="uploadColumns"
-                :data="uploadResult.details"
-                :pagination="{ pageSize: 8 }"
-                max-height="360"
-                style="margin-top: 12px"
-              />
-            </div>
           </n-card>
         </n-space>
       </n-tab-pane>
@@ -316,23 +239,19 @@
 </template>
 
 <script setup lang="ts">
-import { h, onMounted, reactive, ref } from 'vue';
+import { computed, h, onMounted, reactive, ref } from 'vue';
 import {
   NAlert,
   NButton,
   NCard,
   NCode,
   NDataTable,
-  NDivider,
-  NEmpty,
   NForm,
   NFormItem,
   NGi,
   NGrid,
   NInput,
-  NInputNumber,
   NModal,
-  NSelect,
   NSpace,
   NSpin,
   NTabPane,
@@ -342,14 +261,7 @@ import {
   type DataTableColumns
 } from 'naive-ui';
 import { api, UnauthorizedError } from './api';
-import type {
-  AccountItem,
-  AccountPayload,
-  UploadConfig,
-  UploadMethod,
-  UploadResult,
-  UploadResultDetail
-} from './types';
+import type { AccountItem, AccountPayload, IngestConfig } from './types';
 
 const { message } = createDiscreteApi(['message']);
 
@@ -358,24 +270,23 @@ const loginLoading = ref(false);
 const logoutLoading = ref(false);
 const isAuthenticated = ref(false);
 const currentUser = ref('');
+const siteOrigin = ref('');
 
 const loginForm = reactive({
   username: 'admin',
   password: ''
 });
 
-const activeTab = ref<'accounts' | 'upload'>('accounts');
+const activeTab = ref<'accounts' | 'ingest'>('accounts');
 
 const accounts = ref<AccountItem[]>([]);
 const searchKeyword = ref('');
-const checkedRowKeys = ref<number[]>([]);
 
 const tableLoading = ref(false);
 const createLoading = ref(false);
 const editLoading = ref(false);
 const importLoading = ref(false);
-const saveConfigLoading = ref(false);
-const uploadLoading = ref(false);
+const saveIngestLoading = ref(false);
 
 const importText = ref('');
 
@@ -397,47 +308,21 @@ const editForm = reactive<Required<AccountPayload> & { id: number | null }>({
   remark: ''
 });
 
-const uploadConfig = reactive<UploadConfig>({
-  url: '',
-  method: 'POST',
-  contentType: 'application/json',
-  headers: '{}',
-  template: '{"a":"_account_","p":"_password_"}',
-  retryCount: 2,
-  concurrency: 3,
-  retryDelayMs: 600
+const ingestConfig = reactive<IngestConfig>({
+  delimiter: '----',
+  captchaField: 'data',
+  accountField: 'a',
+  passwordField: 'p',
+  clientIdField: 'c',
+  tokenField: 't'
 });
 
-const uploadResult = ref<UploadResult | null>(null);
-
-const placeholderDoc = `{
-  "data": "captchaurn",
-  "a": "_account_",
-  "p": "_password_",
-  "c": "_id_",
-  "t": "_token_"
-}
-
-说明：
-- _account_ 账号
-- _password_ 密码
-- _id_ client_id
-- _token_ refresh_token
-- captchaurn => 账号----密码 或 账号----密码----client_id----refresh_token
-
-例如只要账号和密码：
-{"a":"_account_","p":"_password_"}`;
-
-const methodOptions: Array<{ label: UploadMethod; value: UploadMethod }> = [
-  { label: 'POST', value: 'POST' },
-  { label: 'PUT', value: 'PUT' },
-  { label: 'PATCH', value: 'PATCH' }
-];
+const ingestEndpointPath = ref('/api/upload/ingest');
+const ingestTokenHeader = ref('x-ingest-token');
 
 const rowKey = (row: AccountItem): number => row.id;
 
 const accountColumns: DataTableColumns<AccountItem> = [
-  { type: 'selection' },
   { title: '账号', key: 'account', minWidth: 130 },
   { title: '密码', key: 'password', minWidth: 130 },
   {
@@ -490,26 +375,36 @@ const accountColumns: DataTableColumns<AccountItem> = [
   }
 ];
 
-const uploadColumns: DataTableColumns<UploadResultDetail> = [
-  { title: '账号', key: 'account', minWidth: 130 },
-  {
-    title: '状态',
-    key: 'ok',
-    width: 90,
-    render: (row) =>
-      h(
-        NTag,
-        {
-          size: 'small',
-          type: row.ok ? 'success' : 'error'
-        },
-        { default: () => (row.ok ? '成功' : '失败') }
-      )
-  },
-  { title: 'HTTP', key: 'status', width: 80 },
-  { title: '尝试次数', key: 'attempts', width: 90 },
-  { title: '响应内容', key: 'response', minWidth: 260, ellipsis: { tooltip: true } }
-];
+const ingestEndpointUrl = computed(() =>
+  siteOrigin.value ? `${siteOrigin.value}${ingestEndpointPath.value}` : ingestEndpointPath.value
+);
+
+const captchaPayloadExample = computed(() => {
+  const key = ingestConfig.captchaField;
+  const delimiter = ingestConfig.delimiter;
+  const value = `your_account${delimiter}your_password${delimiter}your_client_id${delimiter}your_refresh_token`;
+  return JSON.stringify({ [key]: value }, null, 2);
+});
+
+const mappedPayloadExample = computed(() =>
+  JSON.stringify(
+    {
+      [ingestConfig.accountField]: 'your_account',
+      [ingestConfig.passwordField]: 'your_password',
+      [ingestConfig.clientIdField]: 'your_client_id',
+      [ingestConfig.tokenField]: 'your_refresh_token'
+    },
+    null,
+    2
+  )
+);
+
+const curlExample = computed(() => {
+  return `curl -X POST '${ingestEndpointUrl.value}' \\
+  -H 'Content-Type: application/json' \\
+  -H '${ingestTokenHeader.value}: <INGEST_TOKEN>' \\
+  -d '${captchaPayloadExample.value.replace(/\n/g, '')}'`;
+});
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -521,9 +416,7 @@ function getErrorMessage(error: unknown): string {
 function clearSessionState(): void {
   isAuthenticated.value = false;
   currentUser.value = '';
-  checkedRowKeys.value = [];
   accounts.value = [];
-  uploadResult.value = null;
   editVisible.value = false;
 }
 
@@ -537,39 +430,6 @@ function handleApiError(error: unknown, showAuthWarning = true): void {
   }
 
   message.error(getErrorMessage(error));
-}
-
-function clampInteger(value: number | null, min: number, max: number, fallback: number): number {
-  if (typeof value !== 'number' || Number.isNaN(value)) {
-    return fallback;
-  }
-
-  const normalized = Math.trunc(value);
-  if (normalized < min) {
-    return min;
-  }
-  if (normalized > max) {
-    return max;
-  }
-  return normalized;
-}
-
-function updateConcurrency(value: number | null): void {
-  uploadConfig.concurrency = clampInteger(value, 1, 10, uploadConfig.concurrency || 3);
-}
-
-function updateRetryCount(value: number | null): void {
-  uploadConfig.retryCount = clampInteger(value, 0, 5, uploadConfig.retryCount || 2);
-}
-
-function updateRetryDelay(value: number | null): void {
-  uploadConfig.retryDelayMs = clampInteger(value, 0, 10000, uploadConfig.retryDelayMs || 600);
-}
-
-function handleCheckedRowKeysUpdate(keys: Array<number | string>): void {
-  checkedRowKeys.value = keys
-    .map((value) => Number(value))
-    .filter((value) => Number.isFinite(value));
 }
 
 function normalizePayload(payload: Required<AccountPayload>): AccountPayload {
@@ -605,8 +465,6 @@ async function loadAccounts(): Promise<void> {
   try {
     const response = await api.listAccounts(searchKeyword.value.trim());
     accounts.value = response.items;
-    const available = new Set(response.items.map((item) => item.id));
-    checkedRowKeys.value = checkedRowKeys.value.filter((id) => available.has(id));
   } catch (error) {
     handleApiError(error);
   } finally {
@@ -614,24 +472,24 @@ async function loadAccounts(): Promise<void> {
   }
 }
 
-async function loadUploadConfig(): Promise<void> {
+async function loadIngestConfig(): Promise<void> {
   try {
-    const response = await api.getUploadConfig();
-    uploadConfig.url = response.item.url;
-    uploadConfig.method = response.item.method;
-    uploadConfig.contentType = response.item.contentType;
-    uploadConfig.headers = response.item.headers;
-    uploadConfig.template = response.item.template;
-    uploadConfig.retryCount = response.item.retryCount;
-    uploadConfig.concurrency = response.item.concurrency;
-    uploadConfig.retryDelayMs = response.item.retryDelayMs;
+    const response = await api.getIngestConfig();
+    ingestConfig.delimiter = response.item.delimiter;
+    ingestConfig.captchaField = response.item.captchaField;
+    ingestConfig.accountField = response.item.accountField;
+    ingestConfig.passwordField = response.item.passwordField;
+    ingestConfig.clientIdField = response.item.clientIdField;
+    ingestConfig.tokenField = response.item.tokenField;
+    ingestEndpointPath.value = response.endpointPath;
+    ingestTokenHeader.value = response.tokenHeader;
   } catch (error) {
     handleApiError(error);
   }
 }
 
 async function loadInitialData(): Promise<void> {
-  await Promise.all([loadAccounts(), loadUploadConfig()]);
+  await Promise.all([loadAccounts(), loadIngestConfig()]);
 }
 
 async function handleLogin(): Promise<void> {
@@ -760,60 +618,34 @@ async function handleImport(): Promise<void> {
   }
 }
 
-async function handleSaveUploadConfig(): Promise<void> {
-  saveConfigLoading.value = true;
+async function handleSaveIngestConfig(): Promise<void> {
+  saveIngestLoading.value = true;
   try {
-    const response = await api.updateUploadConfig({
-      url: uploadConfig.url.trim(),
-      method: uploadConfig.method,
-      contentType: uploadConfig.contentType.trim(),
-      headers: uploadConfig.headers.trim(),
-      template: uploadConfig.template.trim(),
-      retryCount: clampInteger(uploadConfig.retryCount, 0, 5, 2),
-      concurrency: clampInteger(uploadConfig.concurrency, 1, 10, 3),
-      retryDelayMs: clampInteger(uploadConfig.retryDelayMs, 0, 10000, 600)
+    const response = await api.updateIngestConfig({
+      delimiter: ingestConfig.delimiter.trim(),
+      captchaField: ingestConfig.captchaField.trim(),
+      accountField: ingestConfig.accountField.trim(),
+      passwordField: ingestConfig.passwordField.trim(),
+      clientIdField: ingestConfig.clientIdField.trim(),
+      tokenField: ingestConfig.tokenField.trim()
     });
-    uploadConfig.url = response.item.url;
-    uploadConfig.method = response.item.method;
-    uploadConfig.contentType = response.item.contentType;
-    uploadConfig.headers = response.item.headers;
-    uploadConfig.template = response.item.template;
-    uploadConfig.retryCount = response.item.retryCount;
-    uploadConfig.concurrency = response.item.concurrency;
-    uploadConfig.retryDelayMs = response.item.retryDelayMs;
-    message.success('上传配置已保存');
+    ingestConfig.delimiter = response.item.delimiter;
+    ingestConfig.captchaField = response.item.captchaField;
+    ingestConfig.accountField = response.item.accountField;
+    ingestConfig.passwordField = response.item.passwordField;
+    ingestConfig.clientIdField = response.item.clientIdField;
+    ingestConfig.tokenField = response.item.tokenField;
+    message.success('上传映射配置已保存');
   } catch (error) {
     handleApiError(error);
   } finally {
-    saveConfigLoading.value = false;
-  }
-}
-
-async function handleExecuteUpload(uploadAll: boolean): Promise<void> {
-  if (!uploadAll && checkedRowKeys.value.length === 0) {
-    message.warning('请先勾选账号，或使用“上传全部账号”');
-    activeTab.value = 'accounts';
-    return;
-  }
-
-  uploadLoading.value = true;
-  try {
-    const result = await api.executeUpload(uploadAll ? undefined : checkedRowKeys.value);
-    uploadResult.value = result;
-    activeTab.value = 'upload';
-    if (result.failure === 0) {
-      message.success(`上传成功，共 ${result.success} 条`);
-    } else {
-      message.warning(`上传完成，失败 ${result.failure} 条`);
-    }
-  } catch (error) {
-    handleApiError(error);
-  } finally {
-    uploadLoading.value = false;
+    saveIngestLoading.value = false;
   }
 }
 
 onMounted(async () => {
+  siteOrigin.value = window.location.origin;
+
   authLoading.value = true;
   try {
     const me = await api.getMe();

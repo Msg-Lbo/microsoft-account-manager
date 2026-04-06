@@ -2,9 +2,8 @@ import type {
   AccountItem,
   AccountPayload,
   AuthUser,
-  ImportResult,
-  UploadConfig,
-  UploadResult
+  IngestConfig,
+  ImportResult
 } from './types';
 
 interface ApiError {
@@ -100,21 +99,16 @@ export const api = {
     });
   },
 
-  getUploadConfig(): Promise<{ item: UploadConfig }> {
-    return request<{ item: UploadConfig }>('/api/upload-config');
+  getIngestConfig(): Promise<{ item: IngestConfig; endpointPath: string; tokenHeader: string }> {
+    return request<{ item: IngestConfig; endpointPath: string; tokenHeader: string }>(
+      '/api/ingest-config'
+    );
   },
 
-  updateUploadConfig(payload: UploadConfig): Promise<{ item: UploadConfig }> {
-    return request<{ item: UploadConfig }>('/api/upload-config', {
+  updateIngestConfig(payload: IngestConfig): Promise<{ item: IngestConfig }> {
+    return request<{ item: IngestConfig }>('/api/ingest-config', {
       method: 'PUT',
       body: JSON.stringify(payload)
-    });
-  },
-
-  executeUpload(accountIds?: number[]): Promise<UploadResult> {
-    return request<UploadResult>('/api/upload/execute', {
-      method: 'POST',
-      body: JSON.stringify({ accountIds })
     });
   }
 };

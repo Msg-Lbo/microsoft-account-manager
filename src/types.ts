@@ -22,33 +22,13 @@ export interface ImportResult {
   errors: Array<{ line: number; raw: string; reason: string }>;
 }
 
-export type UploadMethod = 'POST' | 'PUT' | 'PATCH';
-
-export interface UploadConfig {
-  url: string;
-  method: UploadMethod;
-  contentType: string;
-  headers: string;
-  template: string;
-  retryCount: number;
-  concurrency: number;
-  retryDelayMs: number;
-}
-
-export interface UploadResultDetail {
-  id: number;
-  account: string;
-  ok: boolean;
-  status: number;
-  response: string;
-  attempts: number;
-}
-
-export interface UploadResult {
-  total: number;
-  success: number;
-  failure: number;
-  details: UploadResultDetail[];
+export interface IngestConfig {
+  delimiter: string;
+  captchaField: string;
+  accountField: string;
+  passwordField: string;
+  clientIdField: string;
+  tokenField: string;
 }
 
 export interface AuthUser {

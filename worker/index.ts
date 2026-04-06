@@ -10,13 +10,12 @@ type Bindings = {
   ADMIN_USERNAME?: string;
   ADMIN_PASSWORD?: string;
   SESSION_SECRET?: string;
+  INGEST_TOKEN?: string;
 };
 
 type Variables = {
   authUser: string;
 };
-
-type UploadMethod = 'POST' | 'PUT' | 'PATCH';
 
 interface AccountRow {
   id: number;
@@ -36,24 +35,13 @@ interface AccountPayload {
   remark?: string;
 }
 
-interface UploadConfig {
-  url: string;
-  method: UploadMethod;
-  contentType: string;
-  headers: string;
-  template: string;
-  retryCount: number;
-  concurrency: number;
-  retryDelayMs: number;
-}
-
-interface UploadResultDetail {
-  id: number;
-  account: string;
-  ok: boolean;
-  status: number;
-  response: string;
-  attempts: number;
+interface IngestConfig {
+  delimiter: string;
+  captchaField: string;
+  accountField: string;
+  passwordField: string;
+  clientIdField: string;
+  tokenField: string;
 }
 
 interface SessionPayload {
@@ -61,18 +49,35 @@ interface SessionPayload {
   exp: number;
 }
 
+interface ParseErrorItem {
+  line: number;
+  raw: string;
+  reason: string;
+}
+
+interface ParsedAccount {
+  line: number;
+  raw: string;
+  payload: AccountPayload;
+}
+
+interface ParseIncomingResult {
+  records: ParsedAccount[];
+  errors: ParseErrorItem[];
+}
+
 const SESSION_COOKIE_NAME = 'am_session';
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24;
+const INGEST_TOKEN_HEADER = 'x-ingest-token';
+const INGEST_PATH = '/api/upload/ingest';
 
-const DEFAULT_UPLOAD_CONFIG: UploadConfig = {
-  url: '',
-  method: 'POST',
-  contentType: 'application/json',
-  headers: '{}',
-  template: '{"a":"_account_","p":"_password_"}',
-  retryCount: 2,
-  concurrency: 3,
-  retryDelayMs: 600
+const DEFAULT_INGEST_CONFIG: IngestConfig = {
+  delimiter: '----',
+  captchaField: 'data',
+  accountField: 'a',
+  passwordField: 'p',
+  clientIdField: 'c',
+  tokenField: 't'
 };
 
 const ACCOUNT_SELECT_SQL = `
@@ -285,7 +290,7 @@ app.post('/api/accounts/import', async (c) => {
   const lines = text.split(/\r?\n/);
   let inserted = 0;
   let skipped = 0;
-  const errors: Array<{ line: number; raw: string; reason: string }> = [];
+  const errors: ParseErrorItem[] = [];
 
   for (let index = 0; index < lines.length; index += 1) {
     const raw = lines[index].trim();
@@ -295,7 +300,7 @@ app.post('/api/accounts/import', async (c) => {
 
     let payload: AccountPayload;
     try {
-      payload = parseAccountLine(raw);
+      payload = parseCaptchaLine(raw, DEFAULT_INGEST_CONFIG.delimiter);
     } catch (error) {
       errors.push({
         line: index + 1,
@@ -337,20 +342,24 @@ app.post('/api/accounts/import', async (c) => {
   return c.json({ inserted, skipped, errors });
 });
 
-app.get('/api/upload-config', async (c) => {
-  const item = await getUploadConfig(c.env.DB);
-  return c.json({ item });
+app.get('/api/ingest-config', async (c) => {
+  const item = await getIngestConfig(c.env.DB);
+  return c.json({
+    item,
+    endpointPath: INGEST_PATH,
+    tokenHeader: INGEST_TOKEN_HEADER
+  });
 });
 
-app.put('/api/upload-config', async (c) => {
-  const body = await readJson<Partial<UploadConfig>>(c);
-  const item = normalizeUploadConfig(body);
-  validateUploadConfig(item);
+app.put('/api/ingest-config', async (c) => {
+  const body = await readJson<Partial<IngestConfig>>(c);
+  const item = normalizeIngestConfig(body);
+  validateIngestConfig(item);
 
   await c.env.DB
     .prepare(
       `INSERT INTO app_settings (key, value, updated_at)
-       VALUES ('upload_config', ?, CURRENT_TIMESTAMP)
+       VALUES ('ingest_config', ?, CURRENT_TIMESTAMP)
        ON CONFLICT(key)
        DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`
     )
@@ -360,42 +369,58 @@ app.put('/api/upload-config', async (c) => {
   return c.json({ item });
 });
 
-app.post('/api/upload/execute', async (c) => {
-  const body = await readJson<{ accountIds?: unknown }>(c);
-  const accountIds = parseAccountIds(body.accountIds);
-  const config = await getUploadConfig(c.env.DB);
-  validateUploadConfig(config);
-
-  if (!config.url) {
-    throw new HTTPException(400, { message: '请先配置上传 URL' });
+app.post('/api/upload/ingest', async (c) => {
+  const expectedToken = getIngestToken(c.env);
+  const receivedToken = readIngestToken(c);
+  if (!receivedToken || !timingSafeEqual(receivedToken, expectedToken)) {
+    throw new HTTPException(401, { message: '上传令牌无效' });
   }
 
-  const accounts =
-    accountIds.length > 0
-      ? await fetchAccountsByIds(c.env.DB, accountIds)
-      : await fetchAllAccounts(c.env.DB);
+  const config = await getIngestConfig(c.env.DB);
+  const incomingData = await readIncomingBody(c);
+  const parsed = parseIncomingPayload(incomingData, config);
 
-  if (accounts.length === 0) {
-    throw new HTTPException(400, { message: '没有可上传的账号' });
+  let inserted = 0;
+  let skipped = 0;
+  const errors = [...parsed.errors];
+
+  if (parsed.records.length > 5000) {
+    throw new HTTPException(400, { message: '单次上传记录不能超过 5000 条' });
   }
 
-  const baseHeaders = parseHeaders(config.headers);
-  if (!hasHeader(baseHeaders, 'Content-Type')) {
-    baseHeaders['Content-Type'] = config.contentType;
+  for (const record of parsed.records) {
+    try {
+      const payload = normalizeAccountPayload(record.payload, true);
+      const result = await c.env.DB
+        .prepare(
+          `INSERT OR IGNORE INTO accounts (account, password, client_id, refresh_token, remark)
+           VALUES (?, ?, ?, ?, ?)`
+        )
+        .bind(
+          payload.account,
+          payload.password,
+          toNullableText(payload.clientId),
+          toNullableText(payload.refreshToken),
+          toNullableText(payload.remark)
+        )
+        .run();
+
+      if ((result.meta.changes ?? 0) > 0) {
+        inserted += 1;
+      } else {
+        skipped += 1;
+      }
+    } catch (error) {
+      errors.push({
+        line: record.line,
+        raw: record.raw,
+        reason: error instanceof Error ? error.message : '数据库写入失败'
+      });
+    }
   }
 
-  const template = parseTemplate(config.template);
-  const details = await mapWithConcurrency(accounts, config.concurrency, async (account) =>
-    uploadAccountWithRetry(account, config, baseHeaders, template)
-  );
-
-  const success = details.filter((item) => item.ok).length;
-  return c.json({
-    total: details.length,
-    success,
-    failure: details.length - success,
-    details
-  });
+  const status = inserted === 0 && skipped === 0 && errors.length > 0 ? 400 : 200;
+  return c.json({ inserted, skipped, errors }, status);
 });
 
 app.all('*', async (c) => {
@@ -435,6 +460,20 @@ async function readJson<T>(c: Context<{ Bindings: Bindings; Variables: Variables
   } catch {
     throw new HTTPException(400, { message: '请求体必须是合法 JSON' });
   }
+}
+
+async function readIncomingBody(c: Context<{ Bindings: Bindings; Variables: Variables }>): Promise<unknown> {
+  const contentType = asText(c.req.header('content-type')).toLowerCase();
+  if (contentType.includes('application/json')) {
+    return readJson<unknown>(c);
+  }
+
+  const text = (await c.req.text()).trim();
+  if (!text) {
+    throw new HTTPException(400, { message: '上传内容不能为空' });
+  }
+
+  return text;
 }
 
 function asText(value: unknown): string {
@@ -487,10 +526,12 @@ function normalizeAccountPayload(input: Partial<AccountPayload>, requireBase: bo
   return payload;
 }
 
-function parseAccountLine(line: string): AccountPayload {
-  const parts = line.split('----').map((item) => item.trim());
+function parseCaptchaLine(line: string, delimiter: string): AccountPayload {
+  const parts = line.split(delimiter).map((item) => item.trim());
   if (parts.length < 2 || parts.length > 4) {
-    throw new Error('格式应为 账号----密码 或 账号----密码----client_id----refresh_token');
+    throw new Error(
+      `格式应为 账号${delimiter}密码 或 账号${delimiter}密码${delimiter}client_id${delimiter}refresh_token`
+    );
   }
 
   const [account, password, clientId = '', refreshToken = ''] = parts;
@@ -507,324 +548,208 @@ function parseAccountLine(line: string): AccountPayload {
   };
 }
 
-function normalizeUploadConfig(input: Partial<UploadConfig>): UploadConfig {
-  const methodRaw = asText(input.method).trim().toUpperCase();
-  const method: UploadMethod = ['POST', 'PUT', 'PATCH'].includes(methodRaw)
-    ? (methodRaw as UploadMethod)
-    : DEFAULT_UPLOAD_CONFIG.method;
-
-  const contentType = asText(input.contentType).trim() || DEFAULT_UPLOAD_CONFIG.contentType;
-  const headers = asText(input.headers).trim() || DEFAULT_UPLOAD_CONFIG.headers;
-  const template = asText(input.template).trim() || DEFAULT_UPLOAD_CONFIG.template;
-  const retryCount = parseInteger(input.retryCount, DEFAULT_UPLOAD_CONFIG.retryCount);
-  const concurrency = parseInteger(input.concurrency, DEFAULT_UPLOAD_CONFIG.concurrency);
-  const retryDelayMs = parseInteger(input.retryDelayMs, DEFAULT_UPLOAD_CONFIG.retryDelayMs);
-
-  return {
-    url: asText(input.url).trim(),
-    method,
-    contentType,
-    headers,
-    template,
-    retryCount,
-    concurrency,
-    retryDelayMs
-  };
-}
-
-async function getUploadConfig(db: D1Database): Promise<UploadConfig> {
+async function getIngestConfig(db: D1Database): Promise<IngestConfig> {
   const row = await db
     .prepare('SELECT value FROM app_settings WHERE key = ? LIMIT 1')
-    .bind('upload_config')
+    .bind('ingest_config')
     .first<{ value: string }>();
 
   if (!row?.value) {
-    return DEFAULT_UPLOAD_CONFIG;
+    return DEFAULT_INGEST_CONFIG;
   }
 
   try {
-    const parsed = JSON.parse(row.value) as Partial<UploadConfig>;
-    return normalizeUploadConfig(parsed);
+    const parsed = JSON.parse(row.value) as Partial<IngestConfig>;
+    return normalizeIngestConfig(parsed);
   } catch {
-    return DEFAULT_UPLOAD_CONFIG;
+    return DEFAULT_INGEST_CONFIG;
   }
 }
 
-function validateUploadConfig(config: UploadConfig): void {
-  if (config.url) {
-    try {
-      const url = new URL(config.url);
-      if (!['http:', 'https:'].includes(url.protocol)) {
-        throw new Error('URL 协议必须为 http 或 https');
-      }
-    } catch {
-      throw new HTTPException(400, { message: '上传 URL 格式错误' });
-    }
-  }
-
-  if (!Number.isInteger(config.retryCount) || config.retryCount < 0 || config.retryCount > 5) {
-    throw new HTTPException(400, { message: '重试次数范围必须在 0 到 5 之间' });
-  }
-
-  if (!Number.isInteger(config.concurrency) || config.concurrency < 1 || config.concurrency > 10) {
-    throw new HTTPException(400, { message: '并发数范围必须在 1 到 10 之间' });
-  }
-
-  if (!Number.isInteger(config.retryDelayMs) || config.retryDelayMs < 0 || config.retryDelayMs > 10000) {
-    throw new HTTPException(400, { message: '重试间隔范围必须在 0 到 10000 毫秒之间' });
-  }
-
-  parseHeaders(config.headers);
-  parseTemplate(config.template);
+function normalizeIngestConfig(input: Partial<IngestConfig>): IngestConfig {
+  return {
+    delimiter: asText(input.delimiter).trim() || DEFAULT_INGEST_CONFIG.delimiter,
+    captchaField: normalizeFieldName(input.captchaField, DEFAULT_INGEST_CONFIG.captchaField),
+    accountField: normalizeFieldName(input.accountField, DEFAULT_INGEST_CONFIG.accountField),
+    passwordField: normalizeFieldName(input.passwordField, DEFAULT_INGEST_CONFIG.passwordField),
+    clientIdField: normalizeFieldName(input.clientIdField, DEFAULT_INGEST_CONFIG.clientIdField),
+    tokenField: normalizeFieldName(input.tokenField, DEFAULT_INGEST_CONFIG.tokenField)
+  };
 }
 
-function parseHeaders(input: string): Record<string, string> {
-  const text = input.trim();
-  if (!text) {
-    return {};
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new HTTPException(400, { message: '请求头必须是 JSON 格式' });
-  }
-
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new HTTPException(400, { message: '请求头必须是 JSON 对象' });
-  }
-
-  const headers: Record<string, string> = {};
-  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-    headers[key] = asText(value);
-  }
-
-  return headers;
-}
-
-function parseTemplate(input: string): unknown {
-  const text = input.trim();
-  if (!text) {
-    throw new HTTPException(400, { message: '数据模板不能为空' });
-  }
-
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new HTTPException(400, { message: '数据模板必须是合法 JSON' });
-  }
-}
-
-function parseInteger(value: unknown, fallback: number): number {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return Math.trunc(value);
-  }
-
+function normalizeFieldName(value: unknown, fallback: string): string {
   const text = asText(value).trim();
   if (!text) {
     return fallback;
   }
-
-  const parsed = Number.parseInt(text, 10);
-  return Number.isFinite(parsed) ? parsed : fallback;
+  return text;
 }
 
-function parseAccountIds(input: unknown): number[] {
-  if (!Array.isArray(input)) {
-    return [];
+function validateIngestConfig(config: IngestConfig): void {
+  if (config.delimiter.length < 1 || config.delimiter.length > 12) {
+    throw new HTTPException(400, { message: '分隔符长度必须在 1 到 12 之间' });
   }
 
-  const ids = input
-    .map((value) => Number.parseInt(String(value), 10))
-    .filter((value) => Number.isInteger(value) && value > 0);
+  const fields = [
+    config.captchaField,
+    config.accountField,
+    config.passwordField,
+    config.clientIdField,
+    config.tokenField
+  ];
 
-  return Array.from(new Set(ids));
-}
-
-async function fetchAllAccounts(db: D1Database): Promise<AccountRow[]> {
-  const { results } = await db.prepare(`${ACCOUNT_SELECT_SQL} ORDER BY id DESC`).all<AccountRow>();
-  return results ?? [];
-}
-
-async function fetchAccountsByIds(db: D1Database, ids: number[]): Promise<AccountRow[]> {
-  if (ids.length === 0) {
-    return [];
-  }
-
-  const placeholders = ids.map(() => '?').join(',');
-  const statement = db
-    .prepare(`${ACCOUNT_SELECT_SQL} WHERE id IN (${placeholders}) ORDER BY id DESC`)
-    .bind(...ids);
-  const { results } = await statement.all<AccountRow>();
-  return results ?? [];
-}
-
-function hasHeader(headers: Record<string, string>, target: string): boolean {
-  const targetLower = target.toLowerCase();
-  return Object.keys(headers).some((name) => name.toLowerCase() === targetLower);
-}
-
-function fillTemplate(template: unknown, account: AccountRow): unknown {
-  if (typeof template === 'string') {
-    return fillTemplateString(template, account);
-  }
-
-  if (Array.isArray(template)) {
-    return template.map((item) => fillTemplate(item, account));
-  }
-
-  if (template && typeof template === 'object') {
-    const mapped: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(template as Record<string, unknown>)) {
-      mapped[key] = fillTemplate(value, account);
-    }
-    return mapped;
-  }
-
-  return template;
-}
-
-function fillTemplateString(template: string, account: AccountRow): string {
-  return template
-    .replaceAll('_account_', account.account)
-    .replaceAll('_password_', account.password)
-    .replaceAll('_id_', account.clientId ?? '')
-    .replaceAll('_token_', account.refreshToken ?? '')
-    .replaceAll('captchaurn', toCaptchaUrn(account));
-}
-
-function toCaptchaUrn(account: AccountRow): string {
-  if (!account.clientId && !account.refreshToken) {
-    return `${account.account}----${account.password}`;
-  }
-
-  return `${account.account}----${account.password}----${account.clientId ?? ''}----${account.refreshToken ?? ''}`;
-}
-
-function buildRequestBody(payload: unknown, contentType: string): string {
-  const lowerType = contentType.toLowerCase();
-
-  if (lowerType.includes('application/json')) {
-    return JSON.stringify(payload);
-  }
-
-  if (lowerType.includes('application/x-www-form-urlencoded')) {
-    return toUrlEncoded(payload);
-  }
-
-  if (typeof payload === 'string') {
-    return payload;
-  }
-
-  return JSON.stringify(payload);
-}
-
-function toUrlEncoded(payload: unknown): string {
-  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-    return new URLSearchParams({ data: asText(payload) }).toString();
-  }
-
-  const params = new URLSearchParams();
-  for (const [key, value] of Object.entries(payload as Record<string, unknown>)) {
-    if (value === null || value === undefined) {
-      params.set(key, '');
-    } else if (typeof value === 'string') {
-      params.set(key, value);
-    } else {
-      params.set(key, JSON.stringify(value));
+  for (const field of fields) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(field)) {
+      throw new HTTPException(400, { message: `字段名不合法: ${field}` });
     }
   }
-
-  return params.toString();
 }
 
-async function uploadAccountWithRetry(
-  account: AccountRow,
-  config: UploadConfig,
-  baseHeaders: Record<string, string>,
-  template: unknown
-): Promise<UploadResultDetail> {
-  const payload = fillTemplate(template, account);
-  const maxAttempts = config.retryCount + 1;
-  let lastStatus = 0;
-  let lastResponse = '请求失败';
+function parseIncomingPayload(input: unknown, config: IngestConfig): ParseIncomingResult {
+  const records: ParsedAccount[] = [];
+  const errors: ParseErrorItem[] = [];
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    try {
-      const response = await fetch(config.url, {
-        method: config.method,
-        headers: new Headers(baseHeaders),
-        body: buildRequestBody(payload, config.contentType)
-      });
-
-      const responseText = truncate(await response.text(), 600) || '(empty body)';
-      if (response.ok) {
-        return {
-          id: account.id,
-          account: account.account,
-          ok: true,
-          status: response.status,
-          response: responseText,
-          attempts: attempt
-        };
-      }
-
-      lastStatus = response.status;
-      lastResponse = responseText;
-    } catch (error) {
-      lastStatus = 0;
-      lastResponse = truncate(error instanceof Error ? error.message : '请求异常', 600);
-    }
-
-    if (attempt < maxAttempts && config.retryDelayMs > 0) {
-      await sleep(config.retryDelayMs);
-    }
-  }
-
-  return {
-    id: account.id,
-    account: account.account,
-    ok: false,
-    status: lastStatus,
-    response: lastResponse,
-    attempts: maxAttempts
+  const pushError = (line: number, raw: unknown, reason: string): void => {
+    errors.push({
+      line,
+      raw: truncate(asText(raw), 240),
+      reason
+    });
   };
-}
 
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  concurrency: number,
-  mapper: (item: T, index: number) => Promise<R>
-): Promise<R[]> {
-  if (items.length === 0) {
-    return [];
-  }
-
-  const safeConcurrency = Math.max(1, Math.min(concurrency, items.length));
-  const results = new Array<R>(items.length);
-  let cursor = 0;
-
-  const workers = Array.from({ length: safeConcurrency }, async () => {
-    while (true) {
-      const index = cursor;
-      cursor += 1;
-      if (index >= items.length) {
-        break;
+  const handleCaptchaText = (text: string, lineStart: number): void => {
+    const lines = text.split(/\r?\n/);
+    let offset = 0;
+    for (const sourceLine of lines) {
+      const raw = sourceLine.trim();
+      if (!raw) {
+        offset += 1;
+        continue;
       }
 
-      results[index] = await mapper(items[index], index);
-    }
-  });
+      try {
+        const payload = parseCaptchaLine(raw, config.delimiter);
+        records.push({ line: lineStart + offset, raw, payload });
+      } catch (error) {
+        pushError(lineStart + offset, raw, error instanceof Error ? error.message : '格式错误');
+      }
 
-  await Promise.all(workers);
-  return results;
+      offset += 1;
+    }
+  };
+
+  const handleObject = (obj: Record<string, unknown>, line: number): void => {
+    const captchaNode = obj[config.captchaField];
+    if (typeof captchaNode === 'string') {
+      handleCaptchaText(captchaNode, line);
+      return;
+    }
+
+    if (Array.isArray(captchaNode)) {
+      captchaNode.forEach((item, index) => {
+        consume(item, line + index);
+      });
+      return;
+    }
+
+    const mappedHasAccount = hasOwnKey(obj, config.accountField);
+    const mappedHasPassword = hasOwnKey(obj, config.passwordField);
+    if (mappedHasAccount || mappedHasPassword) {
+      const account = asText(obj[config.accountField]).trim();
+      const password = asText(obj[config.passwordField]).trim();
+      if (!account || !password) {
+        pushError(line, safeStringify(obj), `字段 ${config.accountField} 和 ${config.passwordField} 不能为空`);
+        return;
+      }
+
+      records.push({
+        line,
+        raw: safeStringify(obj),
+        payload: {
+          account,
+          password,
+          clientId: asText(obj[config.clientIdField]).trim(),
+          refreshToken: asText(obj[config.tokenField]).trim(),
+          remark: ''
+        }
+      });
+      return;
+    }
+
+    const plainHasAccount = hasOwnKey(obj, 'account');
+    const plainHasPassword = hasOwnKey(obj, 'password');
+    if (plainHasAccount || plainHasPassword) {
+      const account = asText(obj.account).trim();
+      const password = asText(obj.password).trim();
+      if (!account || !password) {
+        pushError(line, safeStringify(obj), '字段 account 和 password 不能为空');
+        return;
+      }
+
+      records.push({
+        line,
+        raw: safeStringify(obj),
+        payload: {
+          account,
+          password,
+          clientId: asText(obj.clientId ?? obj.client_id).trim(),
+          refreshToken: asText(obj.refreshToken ?? obj.refresh_token).trim(),
+          remark: asText(obj.remark).trim()
+        }
+      });
+      return;
+    }
+
+    const nestedList = obj.items ?? obj.list ?? null;
+    if (Array.isArray(nestedList)) {
+      nestedList.forEach((item, index) => {
+        consume(item, line + index);
+      });
+      return;
+    }
+
+    pushError(line, safeStringify(obj), '无法识别的上传数据格式');
+  };
+
+  const consume = (node: unknown, line: number): void => {
+    if (typeof node === 'string') {
+      handleCaptchaText(node, line);
+      return;
+    }
+
+    if (Array.isArray(node)) {
+      node.forEach((item, index) => {
+        consume(item, line + index);
+      });
+      return;
+    }
+
+    if (!node || typeof node !== 'object') {
+      pushError(line, safeStringify(node), '上传内容必须是字符串、对象或数组');
+      return;
+    }
+
+    handleObject(node as Record<string, unknown>, line);
+  };
+
+  consume(input, 1);
+  return { records, errors };
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
+function hasOwnKey(obj: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+function safeStringify(value: unknown): string {
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return asText(value);
+  }
 }
 
 function truncate(input: string, limit: number): string {
@@ -835,7 +760,7 @@ function truncate(input: string, limit: number): string {
 }
 
 function isPublicApiPath(pathname: string): boolean {
-  return pathname === '/api/health' || pathname === '/api/auth/login';
+  return pathname === '/api/health' || pathname === '/api/auth/login' || pathname === INGEST_PATH;
 }
 
 async function authenticateRequest(c: Context<{ Bindings: Bindings; Variables: Variables }>): Promise<string | null> {
@@ -875,6 +800,30 @@ function getSessionSecret(env: Bindings): string {
     });
   }
   return secret;
+}
+
+function getIngestToken(env: Bindings): string {
+  const token = asText(env.INGEST_TOKEN);
+  if (!token) {
+    throw new HTTPException(500, {
+      message: '服务端未配置 INGEST_TOKEN，请执行 wrangler secret put INGEST_TOKEN'
+    });
+  }
+  return token;
+}
+
+function readIngestToken(c: Context<{ Bindings: Bindings; Variables: Variables }>): string {
+  const headerToken = asText(c.req.header(INGEST_TOKEN_HEADER)).trim();
+  if (headerToken) {
+    return headerToken;
+  }
+
+  const authHeader = asText(c.req.header('authorization')).trim();
+  if (authHeader.toLowerCase().startsWith('bearer ')) {
+    return authHeader.slice(7).trim();
+  }
+
+  return asText(c.req.query('token')).trim();
 }
 
 async function createSessionToken(username: string, secret: string): Promise<string> {

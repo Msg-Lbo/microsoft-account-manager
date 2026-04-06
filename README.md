@@ -5,11 +5,12 @@
 ## 功能
 
 - 账号增删改查（账号、密码、client_id、refresh_token、备注）
-- 支持批量导入：`账号----密码` 或 `账号----密码----client_id----refresh_token`
-- 上传配置可视化管理：URL、方法、Content-Type、请求头、数据模板
-- 支持占位符：`_account_`、`_password_`、`_id_`、`_token_`、`captchaurn`
-- 上传任务支持并发控制、失败重试、每条结果回显（含尝试次数）
-- 后台登录鉴权（基于 HttpOnly Cookie 会话）
+- 后台登录鉴权（HttpOnly Cookie 会话）
+- 支持外部系统上传账号到本服务：`POST /api/upload/ingest`
+- 支持两种上传数据格式：
+  - `captchaurn` 行格式（如 `账号----密码----client_id----refresh_token`）
+  - 字段映射格式（如 `{ "a":"...", "p":"...", "c":"...", "t":"..." }`）
+- 后台可配置分隔符和字段映射
 
 ## 本地开发
 
@@ -25,6 +26,7 @@ npm install
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=your_password
 SESSION_SECRET=replace_with_long_random_secret
+INGEST_TOKEN=replace_with_upload_token
 ```
 
 3. 启动 Worker API：
@@ -51,14 +53,13 @@ wrangler d1 create account_manager_db
 
 2. 把返回的 `database_id` 填入 `wrangler.toml` 的 `[[d1_databases]]`。
 
-3. 设置鉴权密钥：
+3. 设置 Secrets：
 
 ```bash
 wrangler secret put ADMIN_PASSWORD
 wrangler secret put SESSION_SECRET
+wrangler secret put INGEST_TOKEN
 ```
-
-> `ADMIN_USERNAME` 默认来自 `wrangler.toml` 的 `[vars]`，默认为 `admin`。
 
 4. 执行数据库迁移：
 
@@ -72,45 +73,44 @@ wrangler d1 migrations apply account_manager_db --remote
 npm run deploy
 ```
 
-## 上传模板说明
+## 外部上传接口
 
-### 模板示例 1
+- 路径：`/api/upload/ingest`
+- 方法：`POST`
+- 鉴权：请求头 `x-ingest-token: <INGEST_TOKEN>`（也支持 `Authorization: Bearer <INGEST_TOKEN>`）
 
-```json
-{"data":"captchaurn"}
-```
-
-`captchaurn` 会被替换为：
-
-- `账号----密码`
-- `账号----密码----client_id----refresh_token`
-
-### 模板示例 2
+### 示例 1：captchaurn
 
 ```json
-{"a":"_account_","p":"_password_","c":"_id_","t":"_token_"}
+{
+  "data": "account----password----client_id----refresh_token"
+}
 ```
 
-- `_account_`: 账号
-- `_password_`: 密码
-- `_id_`: client_id
-- `_token_`: refresh_token
-
-也支持混用：
+### 示例 2：字段映射
 
 ```json
-{"data":"captchaurn","a":"_account_","p":"_password_"}
+{
+  "a": "account",
+  "p": "password",
+  "c": "client_id",
+  "t": "refresh_token"
+}
 ```
 
-## 重试与并发配置
+返回示例：
 
-- `并发数`：同时上传的账号请求数，范围 `1-10`
-- `重试次数`：单条失败后自动重试次数，范围 `0-5`
-- `重试间隔(ms)`：每次重试前等待时长，范围 `0-10000`
+```json
+{
+  "inserted": 10,
+  "skipped": 2,
+  "errors": []
+}
+```
 
 ## 目录结构
 
 - `src/` 前端页面（Naive UI）
 - `worker/index.ts` Worker API 与静态资源入口
-- `migrations/0001_init.sql` D1 初始化 SQL
+- `migrations/` D1 迁移 SQL
 - `wrangler.toml` Cloudflare 配置
