@@ -542,6 +542,19 @@ app.patch('/api/open/accounts/:id/remark', async (c) => {
   });
 });
 
+app.delete('/api/open/accounts/:id', async (c) => {
+  validateOpenApiToken(c, getMailApiToken(c.env));
+
+  const id = parseNumericId(c.req.param('id'));
+  const result = await c.env.DB.prepare('DELETE FROM accounts WHERE id = ?').bind(id).run();
+
+  if ((result.meta.changes ?? 0) === 0) {
+    throw new HTTPException(404, { message: '账号不存在' });
+  }
+
+  return c.json({ ok: true as const });
+});
+
 app.get('/api/ingest-config', async (c) => {
   const item = await getIngestConfig(c.env.DB);
   return c.json({
@@ -1540,7 +1553,8 @@ function isPublicApiPath(pathname: string): boolean {
     pathname === OPEN_MESSAGES_PATH ||
     pathname === '/api/open/accounts' ||
     /^\/api\/open\/accounts\/\d+\/messages$/.test(pathname) ||
-    /^\/api\/open\/accounts\/\d+\/remark$/.test(pathname)
+    /^\/api\/open\/accounts\/\d+\/remark$/.test(pathname) ||
+    /^\/api\/open\/accounts\/\d+$/.test(pathname)
   );
 }
 
