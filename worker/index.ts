@@ -35,6 +35,29 @@ interface AccountRow {
   fetchedCount: number;
 }
 
+interface AccountAliasRow {
+  id: number;
+  accountId: number;
+  aliasEmail: string;
+  aliasSuffix: string;
+  remark: string | null;
+  isRegistered: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface AccountAliasItem {
+  id: number;
+  accountId: number;
+  account: string;
+  aliasEmail: string;
+  aliasSuffix: string;
+  remark: string | null;
+  isRegistered: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface AccountPayload {
   account: string;
   password: string;
@@ -117,6 +140,9 @@ const GRAPH_SCOPE = 'https://graph.microsoft.com/.default';
 const IMAP_SCOPE = 'https://outlook.office.com/IMAP.AccessAsUser.All offline_access';
 const DEFAULT_REFRESH_CONCURRENCY = 8;
 const MAIL_PAGE_SIZE = 100;
+const ALIAS_MAX_COUNT = 5;
+const ALIAS_RANDOM_LENGTH = 5;
+const ALIAS_SUFFIX_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/;
 
 const DEFAULT_INGEST_CONFIG: IngestConfig = {
   delimiter: '----',
@@ -142,6 +168,19 @@ const ACCOUNT_SELECT_SQL = `
     fetched_at AS fetchedAt,
     IFNULL(fetched_count, 0) AS fetchedCount
   FROM accounts
+`;
+
+const ACCOUNT_ALIAS_SELECT_SQL = `
+  SELECT
+    id,
+    account_id AS accountId,
+    alias_email AS aliasEmail,
+    alias_suffix AS aliasSuffix,
+    remark,
+    IFNULL(is_registered, 0) AS isRegistered,
+    created_at AS createdAt,
+    updated_at AS updatedAt
+  FROM account_aliases
 `;
 
 const textEncoder = new TextEncoder();
@@ -273,6 +312,11 @@ app.put('/api/accounts/:id', async (c) => {
   const id = parseNumericId(c.req.param('id'));
   const body = await readJson<Partial<AccountPayload>>(c);
   const payload = normalizeAccountPayload(body, true);
+  const previous = await fetchAccountById(c.env.DB, id);
+
+  if (!previous) {
+    throw new HTTPException(404, { message: '账号不存在' });
+  }
 
   let result: D1Result;
   try {
@@ -302,6 +346,10 @@ app.put('/api/accounts/:id', async (c) => {
     throw new HTTPException(404, { message: '账号不存在' });
   }
 
+  if (previous.account !== payload.account) {
+    await deleteAliasesByAccountIds(c.env.DB, [id]);
+  }
+
   const item = await c.env.DB
     .prepare(`${ACCOUNT_SELECT_SQL} WHERE id = ?`)
     .bind(id)
@@ -316,6 +364,7 @@ app.put('/api/accounts/:id', async (c) => {
 
 app.delete('/api/accounts/:id', async (c) => {
   const id = parseNumericId(c.req.param('id'));
+  await deleteAliasesByAccountIds(c.env.DB, [id]);
   const result = await c.env.DB.prepare('DELETE FROM accounts WHERE id = ?').bind(id).run();
 
   if ((result.meta.changes ?? 0) === 0) {
@@ -328,10 +377,12 @@ app.delete('/api/accounts/:id', async (c) => {
 app.post('/api/accounts/batch-delete', async (c) => {
   const body = await readJson<{ accountIds?: unknown }>(c);
   const accountIds = parseAccountIds(body.accountIds);
-  
+
   if (accountIds.length === 0) {
     throw new HTTPException(400, { message: '请选择要删除的账号' });
   }
+
+  await deleteAliasesByAccountIds(c.env.DB, accountIds);
 
   const placeholders = accountIds.map(() => '?').join(',');
   const result = await c.env.DB
@@ -355,6 +406,110 @@ app.patch('/api/accounts/:id/remark', async (c) => {
   const item = await updateAccountRemark(c.env.DB, id, remark);
   if (!item) {
     throw new HTTPException(404, { message: '账号不存在' });
+  }
+
+  return c.json({ item });
+});
+
+app.get('/api/accounts/:id/aliases', async (c) => {
+  const id = parseNumericId(c.req.param('id'));
+  const account = await fetchAccountById(c.env.DB, id);
+
+  if (!account) {
+    throw new HTTPException(404, { message: '账号不存在' });
+  }
+
+  const items = await fetchAliasesByAccountId(c.env.DB, account.id, account.account);
+  return c.json({
+    accountId: account.id,
+    account: account.account,
+    limit: ALIAS_MAX_COUNT,
+    items
+  });
+});
+
+app.post('/api/accounts/:id/aliases/generate', async (c) => {
+  const id = parseNumericId(c.req.param('id'));
+  const body = await readJson<{ count?: unknown; fillToLimit?: unknown }>(c);
+  const account = await fetchAccountById(c.env.DB, id);
+
+  if (!account) {
+    throw new HTTPException(404, { message: '账号不存在' });
+  }
+
+  const existing = await fetchAliasesByAccountId(c.env.DB, account.id, account.account);
+  const availableSlots = ALIAS_MAX_COUNT - existing.length;
+  if (availableSlots <= 0) {
+    throw new HTTPException(400, { message: `别名数量已达上限 ${ALIAS_MAX_COUNT}` });
+  }
+
+  const fillToLimit = parseBoolean(body.fillToLimit, true);
+  const requestedCount = parsePositiveInt(body.count, 1);
+  const targetCount = fillToLimit ? availableSlots : Math.min(requestedCount, availableSlots);
+
+  const created = await createRandomAliases(c.env.DB, account, targetCount);
+  const items = await fetchAliasesByAccountId(c.env.DB, account.id, account.account);
+  return c.json({
+    accountId: account.id,
+    account: account.account,
+    created,
+    limit: ALIAS_MAX_COUNT,
+    items
+  });
+});
+
+app.post('/api/accounts/:id/aliases/custom', async (c) => {
+  const id = parseNumericId(c.req.param('id'));
+  const body = await readJson<{ suffix?: unknown; fillToLimit?: unknown }>(c);
+  const account = await fetchAccountById(c.env.DB, id);
+
+  if (!account) {
+    throw new HTTPException(404, { message: '账号不存在' });
+  }
+
+  const suffix = normalizeAliasSuffix(body.suffix);
+  const aliasEmail = buildAliasEmail(account.account, suffix);
+  const existing = await fetchAliasesByAccountId(c.env.DB, account.id, account.account);
+  const availableSlots = ALIAS_MAX_COUNT - existing.length;
+  if (availableSlots <= 0) {
+    throw new HTTPException(400, { message: `别名数量已达上限 ${ALIAS_MAX_COUNT}` });
+  }
+
+  if (existing.some((item) => item.aliasEmail.toLowerCase() === aliasEmail.toLowerCase())) {
+    throw new HTTPException(409, { message: '该别名已存在' });
+  }
+
+  const created: AccountAliasItem[] = [];
+  const customItem = await insertAlias(c.env.DB, account, suffix);
+  created.push(customItem);
+
+  if (parseBoolean(body.fillToLimit, false)) {
+    const rest = ALIAS_MAX_COUNT - (existing.length + 1);
+    if (rest > 0) {
+      const generated = await createRandomAliases(c.env.DB, account, rest);
+      created.push(...generated);
+    }
+  }
+
+  const items = await fetchAliasesByAccountId(c.env.DB, account.id, account.account);
+  return c.json({
+    accountId: account.id,
+    account: account.account,
+    created,
+    limit: ALIAS_MAX_COUNT,
+    items
+  });
+});
+
+app.patch('/api/accounts/:id/aliases/:aliasId', async (c) => {
+  const accountId = parseNumericId(c.req.param('id'));
+  const aliasId = parseNumericId(c.req.param('aliasId'));
+  const body = await readJson<{ remark?: unknown; isRegistered?: unknown }>(c);
+  const patch = parseAliasPatchPayload(body, true);
+  const item = await updateAliasById(c.env.DB, accountId, aliasId, patch);
+
+  if (!item) {
+    throw new HTTPException(404, { message: '别名不存在' });
   }
 
   return c.json({ item });
@@ -450,10 +605,13 @@ app.get('/api/accounts/:id/messages', async (c) => {
   const id = parseNumericId(c.req.param('id'));
   const mode = parseMailFetchMode(c.req.query('mode'), 'graph');
   const account = await fetchAccountById(c.env.DB, id);
+  const alias = asText(c.req.query('alias')).trim();
 
   if (!account) {
     throw new HTTPException(404, { message: '账号不存在' });
   }
+
+  const targetAddress = await resolveTargetAccountAddress(c.env.DB, account, alias);
 
   const result = await fetchAccountMessages(c.env.DB, account, mode, true);
   if (!result.ok) {
@@ -462,7 +620,7 @@ app.get('/api/accounts/:id/messages', async (c) => {
 
   return c.json({
     accountId: account.id,
-    account: account.account,
+    account: targetAddress,
     mode,
     messages: result.messages
   });
@@ -474,10 +632,13 @@ app.get('/api/open/accounts/:id/messages', async (c) => {
   const id = parseNumericId(c.req.param('id'));
   const mode = parseMailFetchMode(c.req.query('mode'), 'graph');
   const account = await fetchAccountById(c.env.DB, id);
+  const alias = asText(c.req.query('alias')).trim();
 
   if (!account) {
     throw new HTTPException(404, { message: '账号不存在' });
   }
+
+  const targetAddress = await resolveTargetAccountAddress(c.env.DB, account, alias);
 
   const result = await fetchAccountMessages(c.env.DB, account, mode, true);
   if (!result.ok) {
@@ -486,7 +647,7 @@ app.get('/api/open/accounts/:id/messages', async (c) => {
 
   return c.json({
     accountId: account.id,
-    account: account.account,
+    account: targetAddress,
     mode,
     messages: result.messages
   });
@@ -495,7 +656,7 @@ app.get('/api/open/accounts/:id/messages', async (c) => {
 app.post('/api/open/messages', async (c) => {
   validateOpenApiToken(c, getMailApiToken(c.env));
 
-  const body = await readJson<{ id?: unknown; account?: unknown; mode?: unknown }>(c);
+  const body = await readJson<{ id?: unknown; account?: unknown; mode?: unknown; alias?: unknown }>(c);
   const mode = parseMailFetchMode(body.mode, 'graph');
 
   const rawId = Number.parseInt(asText(body.id), 10);
@@ -503,11 +664,19 @@ app.post('/api/open/messages', async (c) => {
 
   const accountText = asText(body.account).trim();
   const accountByName = accountText ? await fetchAccountByAccount(c.env.DB, accountText) : null;
+  const accountByAlias = accountText && !accountByName ? await fetchAccountByAlias(c.env.DB, accountText) : null;
+  const accountByAliasOwner =
+    accountByAlias && !accountByName ? await fetchAccountById(c.env.DB, accountByAlias.accountId) : null;
 
-  const account = accountById ?? accountByName;
+  const account = accountById ?? accountByName ?? accountByAliasOwner;
   if (!account) {
     throw new HTTPException(400, { message: '请传入有效的 id 或 account' });
   }
+
+  const aliasFromBody = asText(body.alias).trim();
+  const targetAddress = accountByAlias?.aliasEmail
+    ? accountByAlias.aliasEmail
+    : await resolveTargetAccountAddress(c.env.DB, account, aliasFromBody);
 
   const result = await fetchAccountMessages(c.env.DB, account, mode, true);
   if (!result.ok) {
@@ -516,7 +685,7 @@ app.post('/api/open/messages', async (c) => {
 
   return c.json({
     accountId: account.id,
-    account: account.account,
+    account: targetAddress,
     mode,
     messages: result.messages
   });
@@ -542,10 +711,65 @@ app.patch('/api/open/accounts/:id/remark', async (c) => {
   });
 });
 
+app.get('/api/open/aliases', async (c) => {
+  validateOpenApiToken(c, getMailApiToken(c.env));
+
+  const accountText = asText(c.req.query('account')).trim();
+  if (!accountText) {
+    throw new HTTPException(400, { message: 'account 不能为空' });
+  }
+
+  const account = await fetchAccountByAccount(c.env.DB, accountText);
+  if (!account) {
+    throw new HTTPException(404, { message: '账号不存在' });
+  }
+
+  const items = await fetchAliasesByAccountId(c.env.DB, account.id, account.account);
+  return c.json({
+    accountId: account.id,
+    account: account.account,
+    limit: ALIAS_MAX_COUNT,
+    items
+  });
+});
+
+app.patch('/api/open/aliases/:alias/remark', async (c) => {
+  validateOpenApiToken(c, getMailApiToken(c.env));
+
+  const rawAlias = asText(c.req.param('alias')).trim();
+  if (!rawAlias) {
+    throw new HTTPException(400, { message: 'alias 不能为空' });
+  }
+
+  let aliasEmail = rawAlias;
+  try {
+    aliasEmail = decodeURIComponent(rawAlias);
+  } catch {
+    throw new HTTPException(400, { message: 'alias 参数格式错误' });
+  }
+
+  const body = await readJson<{ remark?: unknown; isRegistered?: unknown }>(c);
+  const patch = parseAliasPatchPayload(body, true);
+  const item = await updateAliasByEmail(c.env.DB, aliasEmail, patch);
+
+  if (!item) {
+    throw new HTTPException(404, { message: '别名不存在' });
+  }
+
+  return c.json({
+    ok: true,
+    aliasEmail: item.aliasEmail,
+    isRegistered: item.isRegistered,
+    remark: item.remark,
+    accountId: item.accountId
+  });
+});
+
 app.delete('/api/open/accounts/:id', async (c) => {
   validateOpenApiToken(c, getMailApiToken(c.env));
 
   const id = parseNumericId(c.req.param('id'));
+  await deleteAliasesByAccountIds(c.env.DB, [id]);
   const result = await c.env.DB.prepare('DELETE FROM accounts WHERE id = ?').bind(id).run();
 
   if ((result.meta.changes ?? 0) === 0) {
@@ -747,6 +971,120 @@ function normalizeRemark(input: unknown): string | null {
   return remark || null;
 }
 
+function parseBoolean(input: unknown, fallback: boolean): boolean {
+  if (input === undefined || input === null || input === '') {
+    return fallback;
+  }
+
+  if (typeof input === 'boolean') {
+    return input;
+  }
+
+  const text = asText(input).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'y', 'on'].includes(text)) {
+    return true;
+  }
+  if (['0', 'false', 'no', 'n', 'off'].includes(text)) {
+    return false;
+  }
+
+  throw new HTTPException(400, { message: '布尔值参数不合法' });
+}
+
+function parsePositiveInt(input: unknown, fallback: number): number {
+  if (input === undefined || input === null || input === '') {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(asText(input), 10);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new HTTPException(400, { message: '数量必须是正整数' });
+  }
+  return parsed;
+}
+
+function parseAliasPatchPayload(
+  input: { remark?: unknown; isRegistered?: unknown },
+  requireAtLeastOne: boolean
+): { remark?: string | null; isRegistered?: boolean } {
+  const hasRemark = Object.prototype.hasOwnProperty.call(input, 'remark');
+  const hasRegistered = Object.prototype.hasOwnProperty.call(input, 'isRegistered');
+
+  if (requireAtLeastOne && !hasRemark && !hasRegistered) {
+    throw new HTTPException(400, { message: '至少传入一个可更新字段' });
+  }
+
+  const patch: { remark?: string | null; isRegistered?: boolean } = {};
+  if (hasRemark) {
+    patch.remark = normalizeRemark(input.remark);
+  }
+  if (hasRegistered) {
+    patch.isRegistered = parseBoolean(input.isRegistered, false);
+  }
+
+  return patch;
+}
+
+function normalizeAliasSuffix(input: unknown): string {
+  let value = asText(input).trim();
+  if (!value) {
+    throw new HTTPException(400, { message: '自定义别名不能为空' });
+  }
+
+  const atIndex = value.indexOf('@');
+  if (atIndex >= 0) {
+    value = value.slice(0, atIndex);
+  }
+
+  if (value.startsWith('+')) {
+    value = value.slice(1);
+  }
+
+  if (!ALIAS_SUFFIX_PATTERN.test(value)) {
+    throw new HTTPException(400, {
+      message: '别名后缀仅支持字母、数字、点、下划线和中划线，长度 1-32 位'
+    });
+  }
+
+  return value.toLowerCase();
+}
+
+function parseAccountAddress(account: string): { local: string; domain: string } {
+  const raw = account.trim();
+  const atIndex = raw.lastIndexOf('@');
+  if (atIndex <= 0 || atIndex >= raw.length - 1) {
+    throw new HTTPException(400, { message: '账号邮箱格式不合法，无法生成别名' });
+  }
+
+  const local = raw.slice(0, atIndex).trim();
+  const domain = raw.slice(atIndex + 1).trim();
+  if (!local || !domain) {
+    throw new HTTPException(400, { message: '账号邮箱格式不合法，无法生成别名' });
+  }
+
+  const baseLocal = local.split('+')[0] || local;
+  return {
+    local: baseLocal,
+    domain: domain.toLowerCase()
+  };
+}
+
+function buildAliasEmail(account: string, suffix: string): string {
+  const normalizedSuffix = normalizeAliasSuffix(suffix);
+  const { local, domain } = parseAccountAddress(account);
+  return `${local}+${normalizedSuffix}@${domain}`.toLowerCase();
+}
+
+function generateRandomAliasSuffix(length = ALIAS_RANDOM_LENGTH): string {
+  const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  const bytes = crypto.getRandomValues(new Uint8Array(length));
+  let result = '';
+  for (let index = 0; index < length; index += 1) {
+    result += alphabet[bytes[index] % alphabet.length];
+  }
+  return result;
+}
+
 function parseCaptchaLine(line: string, delimiter: string): AccountPayload {
   const parts = line.split(delimiter).map((item) => item.trim());
   if (parts.length < 2 || parts.length > 4) {
@@ -890,9 +1228,267 @@ async function updateAccountRemark(db: D1Database, id: number, remark: string | 
   return fetchAccountById(db, id);
 }
 
+function mapAliasRow(row: AccountAliasRow, account: string): AccountAliasItem {
+  return {
+    id: row.id,
+    accountId: row.accountId,
+    account,
+    aliasEmail: row.aliasEmail,
+    aliasSuffix: row.aliasSuffix,
+    remark: row.remark,
+    isRegistered: Number(row.isRegistered) === 1,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt
+  };
+}
+
+async function fetchAliasesByAccountId(
+  db: D1Database,
+  accountId: number,
+  account: string
+): Promise<AccountAliasItem[]> {
+  const { results } = await db
+    .prepare(`${ACCOUNT_ALIAS_SELECT_SQL} WHERE account_id = ? ORDER BY id ASC`)
+    .bind(accountId)
+    .all<AccountAliasRow>();
+
+  return (results ?? []).map((row) => mapAliasRow(row, account));
+}
+
+async function fetchAliasRowByAccountAndEmail(
+  db: D1Database,
+  accountId: number,
+  aliasEmail: string
+): Promise<AccountAliasRow | null> {
+  const row = await db
+    .prepare(`${ACCOUNT_ALIAS_SELECT_SQL} WHERE account_id = ? AND lower(alias_email) = lower(?) LIMIT 1`)
+    .bind(accountId, aliasEmail)
+    .first<AccountAliasRow>();
+
+  return row ?? null;
+}
+
+async function fetchAliasRowByEmail(db: D1Database, aliasEmail: string): Promise<AccountAliasRow | null> {
+  const row = await db
+    .prepare(`${ACCOUNT_ALIAS_SELECT_SQL} WHERE lower(alias_email) = lower(?) LIMIT 1`)
+    .bind(aliasEmail)
+    .first<AccountAliasRow>();
+
+  return row ?? null;
+}
+
+async function fetchAccountByAlias(db: D1Database, aliasEmail: string): Promise<AccountAliasItem | null> {
+  const row = await fetchAliasRowByEmail(db, aliasEmail);
+  if (!row) {
+    return null;
+  }
+
+  const account = await fetchAccountById(db, row.accountId);
+  if (!account) {
+    return null;
+  }
+
+  return mapAliasRow(row, account.account);
+}
+
+async function insertAlias(db: D1Database, account: AccountRow, suffix: string): Promise<AccountAliasItem> {
+  const aliasSuffix = normalizeAliasSuffix(suffix);
+  const aliasEmail = buildAliasEmail(account.account, aliasSuffix);
+
+  let result: D1Result;
+  try {
+    result = await db
+      .prepare(
+        `INSERT INTO account_aliases (account_id, alias_email, alias_suffix, remark, is_registered)
+         VALUES (?, ?, ?, NULL, 0)`
+      )
+      .bind(account.id, aliasEmail, aliasSuffix)
+      .run();
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      throw new HTTPException(409, { message: '该别名已存在' });
+    }
+    throw error;
+  }
+
+  const aliasId = Number(result.meta.last_row_id);
+  const row = await db
+    .prepare(`${ACCOUNT_ALIAS_SELECT_SQL} WHERE id = ? AND account_id = ? LIMIT 1`)
+    .bind(aliasId, account.id)
+    .first<AccountAliasRow>();
+
+  if (!row) {
+    throw new HTTPException(500, { message: '别名创建成功，但读取结果失败' });
+  }
+
+  return mapAliasRow(row, account.account);
+}
+
+async function createRandomAliases(
+  db: D1Database,
+  account: AccountRow,
+  count: number
+): Promise<AccountAliasItem[]> {
+  if (count <= 0) {
+    return [];
+  }
+
+  const existing = await fetchAliasesByAccountId(db, account.id, account.account);
+  const exists = new Set(existing.map((item) => item.aliasEmail.toLowerCase()));
+  const created: AccountAliasItem[] = [];
+  let attempts = 0;
+
+  while (created.length < count) {
+    attempts += 1;
+    if (attempts > 200) {
+      throw new HTTPException(500, { message: '生成别名失败，请稍后重试' });
+    }
+
+    const suffix = generateRandomAliasSuffix(ALIAS_RANDOM_LENGTH);
+    const aliasEmail = buildAliasEmail(account.account, suffix);
+    if (exists.has(aliasEmail)) {
+      continue;
+    }
+
+    try {
+      const item = await insertAlias(db, account, suffix);
+      created.push(item);
+      exists.add(item.aliasEmail.toLowerCase());
+    } catch (error) {
+      if (error instanceof HTTPException && error.status === 409) {
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  return created;
+}
+
+async function updateAliasById(
+  db: D1Database,
+  accountId: number,
+  aliasId: number,
+  patch: { remark?: string | null; isRegistered?: boolean }
+): Promise<AccountAliasItem | null> {
+  const account = await fetchAccountById(db, accountId);
+  if (!account) {
+    return null;
+  }
+
+  const current = await db
+    .prepare(`${ACCOUNT_ALIAS_SELECT_SQL} WHERE id = ? AND account_id = ? LIMIT 1`)
+    .bind(aliasId, accountId)
+    .first<AccountAliasRow>();
+
+  if (!current) {
+    return null;
+  }
+
+  const remark = patch.remark !== undefined ? patch.remark : current.remark;
+  const isRegistered = patch.isRegistered !== undefined ? (patch.isRegistered ? 1 : 0) : current.isRegistered;
+
+  await db
+    .prepare(
+      `UPDATE account_aliases
+       SET remark = ?, is_registered = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND account_id = ?`
+    )
+    .bind(remark, isRegistered, aliasId, accountId)
+    .run();
+
+  const updated = await db
+    .prepare(`${ACCOUNT_ALIAS_SELECT_SQL} WHERE id = ? AND account_id = ? LIMIT 1`)
+    .bind(aliasId, accountId)
+    .first<AccountAliasRow>();
+
+  if (!updated) {
+    return null;
+  }
+
+  return mapAliasRow(updated, account.account);
+}
+
+async function updateAliasByEmail(
+  db: D1Database,
+  aliasEmail: string,
+  patch: { remark?: string | null; isRegistered?: boolean }
+): Promise<AccountAliasItem | null> {
+  const current = await fetchAliasRowByEmail(db, aliasEmail);
+  if (!current) {
+    return null;
+  }
+
+  const account = await fetchAccountById(db, current.accountId);
+  if (!account) {
+    return null;
+  }
+
+  const remark = patch.remark !== undefined ? patch.remark : current.remark;
+  const isRegistered = patch.isRegistered !== undefined ? (patch.isRegistered ? 1 : 0) : current.isRegistered;
+
+  await db
+    .prepare(
+      `UPDATE account_aliases
+       SET remark = ?, is_registered = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`
+    )
+    .bind(remark, isRegistered, current.id)
+    .run();
+
+  const updated = await db
+    .prepare(`${ACCOUNT_ALIAS_SELECT_SQL} WHERE id = ? LIMIT 1`)
+    .bind(current.id)
+    .first<AccountAliasRow>();
+
+  if (!updated) {
+    return null;
+  }
+
+  return mapAliasRow(updated, account.account);
+}
+
+async function resolveTargetAccountAddress(
+  db: D1Database,
+  account: AccountRow,
+  aliasInput: string
+): Promise<string> {
+  const alias = aliasInput.trim();
+  if (!alias) {
+    return account.account;
+  }
+
+  if (alias.toLowerCase() === account.account.toLowerCase()) {
+    return account.account;
+  }
+
+  const found = await fetchAliasRowByAccountAndEmail(db, account.id, alias);
+  if (!found) {
+    throw new HTTPException(400, { message: '别名不存在或不属于该账号' });
+  }
+
+  return found.aliasEmail;
+}
+
+async function deleteAliasesByAccountIds(db: D1Database, accountIds: number[]): Promise<void> {
+  if (accountIds.length === 0) {
+    return;
+  }
+
+  const placeholders = accountIds.map(() => '?').join(',');
+  try {
+    await db.prepare(`DELETE FROM account_aliases WHERE account_id IN (${placeholders})`).bind(...accountIds).run();
+  } catch (error) {
+    if (error instanceof Error && /no such table:\s*account_aliases/i.test(error.message)) {
+      return;
+    }
+    throw error;
+  }
+}
+
 async function fetchAccountByAccount(db: D1Database, account: string): Promise<AccountRow | null> {
   const row = await db
-    .prepare(`${ACCOUNT_SELECT_SQL} WHERE account = ? ORDER BY id DESC LIMIT 1`)
+    .prepare(`${ACCOUNT_SELECT_SQL} WHERE lower(account) = lower(?) ORDER BY id DESC LIMIT 1`)
     .bind(account)
     .first<AccountRow>();
   return row ?? null;
@@ -1552,8 +2148,10 @@ function isPublicApiPath(pathname: string): boolean {
     pathname === INGEST_PATH ||
     pathname === OPEN_MESSAGES_PATH ||
     pathname === '/api/open/accounts' ||
+    pathname === '/api/open/aliases' ||
     /^\/api\/open\/accounts\/\d+\/messages$/.test(pathname) ||
     /^\/api\/open\/accounts\/\d+\/remark$/.test(pathname) ||
+    /^\/api\/open\/aliases\/[^/]+\/remark$/.test(pathname) ||
     /^\/api\/open\/accounts\/\d+$/.test(pathname)
   );
 }

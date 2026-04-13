@@ -1,4 +1,5 @@
 import type {
+  AccountAliasItem,
   AccountMailItem,
   AccountItem,
   AccountPayload,
@@ -142,12 +143,85 @@ export const api = {
 
   getAccountMessages(
     id: number,
-    mode: MailFetchMode
+    mode: MailFetchMode,
+    alias?: string
   ): Promise<{ accountId: number; account: string; mode: MailFetchMode; messages: AccountMailItem[] }> {
     const params = new URLSearchParams({ mode });
+    if (alias) {
+      params.set('alias', alias);
+    }
     return request<{ accountId: number; account: string; mode: MailFetchMode; messages: AccountMailItem[] }>(
       `/api/accounts/${id}/messages?${params.toString()}`
     );
+  },
+
+  listAccountAliases(id: number): Promise<{
+    accountId: number;
+    account: string;
+    limit: number;
+    items: AccountAliasItem[];
+  }> {
+    return request<{
+      accountId: number;
+      account: string;
+      limit: number;
+      items: AccountAliasItem[];
+    }>(`/api/accounts/${id}/aliases`);
+  },
+
+  generateAccountAliases(
+    id: number,
+    payload?: { count?: number; fillToLimit?: boolean }
+  ): Promise<{
+    accountId: number;
+    account: string;
+    limit: number;
+    created: AccountAliasItem[];
+    items: AccountAliasItem[];
+  }> {
+    return request<{
+      accountId: number;
+      account: string;
+      limit: number;
+      created: AccountAliasItem[];
+      items: AccountAliasItem[];
+    }>(`/api/accounts/${id}/aliases/generate`, {
+      method: 'POST',
+      body: JSON.stringify(payload ?? {})
+    });
+  },
+
+  createCustomAlias(
+    id: number,
+    payload: { suffix: string; fillToLimit?: boolean }
+  ): Promise<{
+    accountId: number;
+    account: string;
+    limit: number;
+    created: AccountAliasItem[];
+    items: AccountAliasItem[];
+  }> {
+    return request<{
+      accountId: number;
+      account: string;
+      limit: number;
+      created: AccountAliasItem[];
+      items: AccountAliasItem[];
+    }>(`/api/accounts/${id}/aliases/custom`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  },
+
+  updateAccountAlias(
+    id: number,
+    aliasId: number,
+    payload: { remark?: string | null; isRegistered?: boolean }
+  ): Promise<{ item: AccountAliasItem }> {
+    return request<{ item: AccountAliasItem }>(`/api/accounts/${id}/aliases/${aliasId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    });
   },
 
   openUpdateAccountRemark(id: number, remark: string): Promise<{
@@ -168,5 +242,43 @@ export const api = {
   openListAccounts(keyword?: string): Promise<{ items: AccountItem[] }> {
     const query = keyword ? `?${new URLSearchParams({ keyword }).toString()}` : '';
     return request<{ items: AccountItem[] }>(`/api/open/accounts${query}`);
+  },
+
+  openListAliases(account: string): Promise<{
+    accountId: number;
+    account: string;
+    limit: number;
+    items: AccountAliasItem[];
+  }> {
+    const query = new URLSearchParams({ account }).toString();
+    return request<{
+      accountId: number;
+      account: string;
+      limit: number;
+      items: AccountAliasItem[];
+    }>(`/api/open/aliases?${query}`);
+  },
+
+  openUpdateAliasRemark(
+    aliasEmail: string,
+    payload: { remark?: string | null; isRegistered?: boolean }
+  ): Promise<{
+    ok: true;
+    aliasEmail: string;
+    isRegistered: boolean;
+    remark: string | null;
+    accountId: number;
+  }> {
+    const encodedAlias = encodeURIComponent(aliasEmail);
+    return request<{
+      ok: true;
+      aliasEmail: string;
+      isRegistered: boolean;
+      remark: string | null;
+      accountId: number;
+    }>(`/api/open/aliases/${encodedAlias}/remark`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    });
   }
 };

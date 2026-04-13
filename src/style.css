@@ -145,6 +145,65 @@ body {
 .action-cell {
   display: flex;
   gap: 4px;
+  flex-wrap: wrap;
+}
+
+.alias-popover {
+  width: min(420px, 82vw);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.alias-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.alias-popover-title {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--title);
+}
+
+.alias-custom-trigger {
+  align-self: flex-start;
+}
+
+.alias-loading {
+  display: flex;
+  justify-content: center;
+  padding: 6px 0;
+}
+
+.alias-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 270px;
+  overflow: auto;
+}
+
+.alias-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding-bottom: 6px;
+  border-bottom: 1px dashed rgba(22, 52, 71, 0.14);
+}
+
+.alias-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.alias-address {
+  flex: 1;
+  min-width: 180px;
+  justify-content: flex-start;
 }
 
 .mail-modal-wrapper {

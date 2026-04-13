@@ -261,6 +261,14 @@
                 ：按账号 ID 或邮箱地址获取全部邮件（开放 API）。
               </li>
               <li>
+                <code>GET /api/open/aliases?account=xxx@outlook.com</code>
+                ：按主邮箱获取别名列表（开放 API）。
+              </li>
+              <li>
+                <code>PATCH /api/open/aliases/:alias/remark</code>
+                ：更新别名状态与备注（开放 API）。
+              </li>
+              <li>
                 <code>PATCH /api/open/accounts/:id/remark</code>
                 ：更新指定账号备注（开放 API）。
               </li>
@@ -286,6 +294,10 @@
               <n-code :code="openApiCurlByAccount" language="bash" word-wrap />
               <p class="hint">更新账号备注：</p>
               <n-code :code="openApiCurlUpdateRemark" language="bash" word-wrap />
+              <p class="hint">获取别名列表：</p>
+              <n-code :code="openApiCurlListAliases" language="bash" word-wrap />
+              <p class="hint">更新别名状态：</p>
+              <n-code :code="openApiCurlUpdateAliasRemark" language="bash" word-wrap />
               <p class="hint">删除账号：</p>
               <n-code :code="openApiCurlDeleteAccount" language="bash" word-wrap />
             </n-space>
@@ -341,11 +353,50 @@
     </n-modal>
 
     <n-modal
+      v-model:show="aliasGenerateVisible"
+      preset="card"
+      title="生成别名邮箱"
+      style="max-width: 520px"
+    >
+      <n-space vertical size="small">
+        <p class="hint">{{ aliasGenerateHint }}</p>
+        <n-checkbox v-model:checked="aliasFillToLimit">是否补满 5 个别名邮箱</n-checkbox>
+        <n-input
+          v-model:value="aliasCustomSuffix"
+          placeholder="输入自定义后缀（不含 + 和 @）"
+          clearable
+        />
+        <p class="hint">提示：别名邮箱生成后无法删除。</p>
+      </n-space>
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="closeAliasGenerateModal">取消</n-button>
+          <n-button :loading="aliasGenerateLoading" @click="handleGenerateAliasRandom">生成随机</n-button>
+          <n-button type="primary" :loading="aliasGenerateLoading" @click="handleCreateCustomAlias">
+            添加自定义
+          </n-button>
+        </n-space>
+      </template>
+    </n-modal>
+
+    <n-modal
       v-model:show="mailVisible"
       preset="card"
       :title="`邮箱取件(${mailCurrentModeLabel}) - ${mailAccount}`"
       style="width: min(1100px, 96vw)"
+      @after-leave="handleMailModalAfterLeave"
     >
+      <template #header-extra>
+        <n-button
+          size="small"
+          secondary
+          :loading="mailLoading"
+          :disabled="!mailCurrentAccountId"
+          @click="handleRefreshMail"
+        >
+          刷新邮件
+        </n-button>
+      </template>
       <div class="mail-modal-wrapper">
         <div class="mail-list-panel">
           <n-spin :show="mailLoading">
@@ -385,6 +436,7 @@ import { computed, h, onMounted, reactive, ref } from 'vue';
 import {
   NButton,
   NCard,
+  NCheckbox,
   NCode,
   NDataTable,
   NEmpty,
@@ -394,6 +446,7 @@ import {
   NGrid,
   NInput,
   NModal,
+  NPopover,
   NSelect,
   NSpace,
   NSpin,
@@ -405,6 +458,7 @@ import {
 } from 'naive-ui';
 import { api, UnauthorizedError } from './api';
 import type {
+  AccountAliasItem,
   AccountItem,
   AccountMailItem,
   AccountPayload,
@@ -433,6 +487,11 @@ const accounts = ref<AccountItem[]>([]);
 const searchKeyword = ref('');
 const checkedRowKeys = ref<number[]>([]);
 const tablePageSize = ref<number>(20);
+const aliasLimit = 5;
+const aliasByAccountId = reactive<Record<number, AccountAliasItem[]>>({});
+const aliasLoadingByAccountId = reactive<Record<number, boolean>>({});
+const aliasPopoverVisibleByAccountId = reactive<Record<number, boolean>>({});
+const aliasStatusLoadingByAliasId = reactive<Record<number, boolean>>({});
 
 const mailVisible = ref(false);
 const mailLoading = ref(false);
@@ -441,6 +500,14 @@ const mailFetchMode = ref<MailFetchMode>('graph');
 const mailCurrentMode = ref<MailFetchMode>('graph');
 const mailItems = ref<AccountMailItem[]>([]);
 const selectedMailId = ref('');
+const mailCurrentAccountId = ref<number | null>(null);
+const mailCurrentAlias = ref('');
+
+const aliasGenerateVisible = ref(false);
+const aliasGenerateLoading = ref(false);
+const aliasFillToLimit = ref(true);
+const aliasCustomSuffix = ref('');
+const aliasGenerateTargetAccountId = ref<number | null>(null);
 
 const tableLoading = ref(false);
 const createLoading = ref(false);
@@ -585,7 +652,7 @@ const accountColumns: DataTableColumns<AccountItem> = [
   {
     title: '操作',
     key: 'actions',
-    width: 130,
+    width: 210,
     render: (row) =>
       h('div', { class: 'action-cell' }, [
         h(
@@ -597,6 +664,34 @@ const accountColumns: DataTableColumns<AccountItem> = [
             onClick: () => openEditModal(row)
           },
           { default: () => '编辑' }
+        ),
+        h(
+          NPopover,
+          {
+            trigger: 'click',
+            placement: 'bottom-end',
+            show: aliasPopoverVisibleByAccountId[row.id] ?? false,
+            width: 420,
+            'onUpdate:show': (show: boolean) => {
+              void handleAliasPopoverVisibleChange(row, show);
+            }
+          },
+          {
+            trigger: () =>
+              h(
+                NButton,
+                {
+                  size: 'small',
+                  quaternary: true,
+                  type: 'info',
+                  onClick: (event: MouseEvent) => {
+                    event.stopPropagation();
+                  }
+                },
+                { default: () => '别名' }
+              ),
+            default: () => renderAliasPopoverContent(row)
+          }
         ),
         h(
           NButton,
@@ -644,6 +739,22 @@ const mailModeOptions: Array<{ label: string; value: MailFetchMode }> = [
 
 const mailCurrentModeLabel = computed(() => (mailCurrentMode.value === 'imap' ? 'IMAP' : 'Graph'));
 
+const aliasGenerateHint = computed(() => {
+  if (!aliasGenerateTargetAccountId.value) {
+    return '可生成随机 5 位后缀别名，也可添加自定义别名。';
+  }
+
+  const aliases = aliasByAccountId[aliasGenerateTargetAccountId.value] ?? [];
+  const remain = Math.max(aliasLimit - aliases.length, 0);
+  if (aliases.length === 0) {
+    return '当前没有别名，建议本次直接补满 5 个。';
+  }
+  if (remain === 0) {
+    return '当前已满 5 个别名。';
+  }
+  return `当前已有 ${aliases.length} 个别名，本次最多可新增 ${remain} 个。`;
+});
+
 const apiBaseUrl = computed(() => siteOrigin.value || 'https://your-domain');
 
 const openApiCurlListAccounts = computed(() => {
@@ -675,6 +786,18 @@ const openApiCurlDeleteAccount = computed(() => {
   -H "${mailApiTokenHeader}: <MAIL_API_TOKEN>"`;
 });
 
+const openApiCurlListAliases = computed(() => {
+  return `curl "${apiBaseUrl.value}/api/open/aliases?account=example@outlook.com" \\
+  -H "${mailApiTokenHeader}: <MAIL_API_TOKEN>"`;
+});
+
+const openApiCurlUpdateAliasRemark = computed(() => {
+  return `curl -X PATCH "${apiBaseUrl.value}/api/open/aliases/example%2Babcde%40outlook.com/remark" \\
+  -H "Content-Type: application/json" \\
+  -H "${mailApiTokenHeader}: <MAIL_API_TOKEN>" \\
+  -d '{"isRegistered":true,"remark":"已注册"}'`;
+});
+
 const adminApiDoc = `POST /api/auth/login                     后台管理员登录
 POST /api/auth/logout                    退出登录
 GET  /api/auth/me                        获取当前登录用户
@@ -684,6 +807,10 @@ PUT  /api/accounts/:id                   更新账号
 DELETE /api/accounts/:id                 删除账号
 POST /api/accounts/import                批量导入账号
 PATCH /api/accounts/:id/remark           更新备注
+GET  /api/accounts/:id/aliases           获取指定账号别名列表
+POST /api/accounts/:id/aliases/generate  生成随机别名
+POST /api/accounts/:id/aliases/custom    添加自定义别名
+PATCH /api/accounts/:id/aliases/:aliasId 更新别名状态/备注
 POST /api/accounts/refresh               刷新 refresh_token
 GET  /api/accounts/:id/messages?mode=... 管理端按账号取件
 GET  /api/ingest-config                  获取上传映射配置
@@ -740,6 +867,18 @@ function clearSessionState(): void {
   currentUser.value = '';
   accounts.value = [];
   checkedRowKeys.value = [];
+  Object.keys(aliasByAccountId).forEach((key) => {
+    delete aliasByAccountId[Number(key)];
+  });
+  Object.keys(aliasLoadingByAccountId).forEach((key) => {
+    delete aliasLoadingByAccountId[Number(key)];
+  });
+  Object.keys(aliasPopoverVisibleByAccountId).forEach((key) => {
+    delete aliasPopoverVisibleByAccountId[Number(key)];
+  });
+  Object.keys(aliasStatusLoadingByAliasId).forEach((key) => {
+    delete aliasStatusLoadingByAliasId[Number(key)];
+  });
   mailVisible.value = false;
   mailLoading.value = false;
   mailAccount.value = '';
@@ -747,7 +886,14 @@ function clearSessionState(): void {
   mailCurrentMode.value = 'graph';
   mailItems.value = [];
   selectedMailId.value = '';
+  mailCurrentAccountId.value = null;
+  mailCurrentAlias.value = '';
   editVisible.value = false;
+  aliasGenerateVisible.value = false;
+  aliasGenerateLoading.value = false;
+  aliasFillToLimit.value = true;
+  aliasCustomSuffix.value = '';
+  aliasGenerateTargetAccountId.value = null;
 }
 
 function handleApiError(error: unknown, showAuthWarning = true): void {
@@ -837,6 +983,242 @@ function openEditModal(row: AccountItem): void {
   editVisible.value = true;
 }
 
+function getAliasesByAccountId(accountId: number): AccountAliasItem[] {
+  return aliasByAccountId[accountId] ?? [];
+}
+
+function resolveAliasStatusType(isRegistered: boolean): 'success' | 'warning' {
+  return isRegistered ? 'success' : 'warning';
+}
+
+async function loadAliasesForAccount(row: AccountItem, force = false): Promise<void> {
+  if (!force && aliasByAccountId[row.id]) {
+    return;
+  }
+
+  aliasLoadingByAccountId[row.id] = true;
+  try {
+    const response = await api.listAccountAliases(row.id);
+    aliasByAccountId[row.id] = response.items;
+  } catch (error) {
+    handleApiError(error, false);
+  } finally {
+    aliasLoadingByAccountId[row.id] = false;
+  }
+}
+
+async function handleAliasPopoverVisibleChange(row: AccountItem, show: boolean): Promise<void> {
+  aliasPopoverVisibleByAccountId[row.id] = show;
+  if (show) {
+    await loadAliasesForAccount(row, false);
+  }
+}
+
+async function openAliasGenerateModal(row: AccountItem): Promise<void> {
+  await loadAliasesForAccount(row, false);
+  aliasGenerateTargetAccountId.value = row.id;
+  aliasGenerateVisible.value = true;
+  aliasGenerateLoading.value = false;
+  aliasFillToLimit.value = true;
+  aliasCustomSuffix.value = '';
+}
+
+function closeAliasGenerateModal(): void {
+  aliasGenerateVisible.value = false;
+  aliasGenerateLoading.value = false;
+  aliasCustomSuffix.value = '';
+  aliasGenerateTargetAccountId.value = null;
+}
+
+function renderAliasPopoverContent(row: AccountItem) {
+  const aliases = getAliasesByAccountId(row.id);
+  const remain = Math.max(aliasLimit - aliases.length, 0);
+  const canCreate = remain > 0;
+  const loading = aliasLoadingByAccountId[row.id] ?? false;
+
+  return h('div', { class: 'alias-popover' }, [
+    h('div', { class: 'alias-popover-header' }, [
+      h('span', { class: 'alias-popover-title' }, `别名 ${aliases.length}/${aliasLimit}`),
+      canCreate
+        ? h(
+            NButton,
+            {
+              size: 'tiny',
+              type: 'primary',
+              secondary: true,
+              onClick: (event: MouseEvent) => {
+                event.stopPropagation();
+                void openAliasGenerateModal(row);
+              }
+            },
+            { default: () => '生成别名邮箱' }
+          )
+        : null
+    ]),
+    canCreate
+      ? h(
+          NButton,
+          {
+            size: 'tiny',
+            quaternary: true,
+            type: 'info',
+            class: 'alias-custom-trigger',
+            onClick: (event: MouseEvent) => {
+              event.stopPropagation();
+              void openAliasGenerateModal(row);
+            }
+          },
+          { default: () => '添加自定义' }
+        )
+      : null,
+    loading
+      ? h(
+          'div',
+          { class: 'alias-loading' },
+          h(NSpin, { show: true, size: 'small' })
+        )
+      : aliases.length === 0
+        ? h(NEmpty, { description: '暂无别名邮箱', size: 'small' })
+        : h(
+            'div',
+            { class: 'alias-list' },
+            aliases.map((alias) =>
+              h('div', { key: alias.id, class: 'alias-row' }, [
+                h(
+                  NButton,
+                  {
+                    text: true,
+                    type: 'primary',
+                    class: 'alias-address',
+                    onClick: (event: MouseEvent) => {
+                      event.stopPropagation();
+                      void handleOpenAliasMailModal(row, alias.aliasEmail);
+                    }
+                  },
+                  { default: () => alias.aliasEmail }
+                ),
+                h(
+                  NTag,
+                  {
+                    size: 'small',
+                    type: resolveAliasStatusType(alias.isRegistered)
+                  },
+                  { default: () => (alias.isRegistered ? '已注册' : '未注册') }
+                ),
+                h(
+                  NButton,
+                  {
+                    size: 'tiny',
+                    quaternary: true,
+                    type: alias.isRegistered ? 'warning' : 'success',
+                    loading: aliasStatusLoadingByAliasId[alias.id] ?? false,
+                    onClick: (event: MouseEvent) => {
+                      event.stopPropagation();
+                      void handleToggleAliasStatus(row, alias);
+                    }
+                  },
+                  { default: () => (alias.isRegistered ? '设为未注册' : '设为已注册') }
+                ),
+                h(
+                  NButton,
+                  {
+                    size: 'tiny',
+                    onClick: (event: MouseEvent) => {
+                      event.stopPropagation();
+                      void handleCopyText(alias.aliasEmail);
+                    }
+                  },
+                  { default: () => '复制' }
+                )
+              ])
+            )
+          )
+  ]);
+}
+
+async function handleGenerateAliasRandom(): Promise<void> {
+  if (!aliasGenerateTargetAccountId.value) {
+    return;
+  }
+
+  const accountId = aliasGenerateTargetAccountId.value;
+  const aliases = getAliasesByAccountId(accountId);
+  const remain = Math.max(aliasLimit - aliases.length, 0);
+  if (remain <= 0) {
+    message.warning(`别名数量已满 ${aliasLimit} 个`);
+    return;
+  }
+
+  aliasGenerateLoading.value = true;
+  try {
+    const response = await api.generateAccountAliases(accountId, {
+      fillToLimit: aliasFillToLimit.value,
+      count: aliasFillToLimit.value ? undefined : 1
+    });
+    aliasByAccountId[accountId] = response.items;
+    if (response.created.length > 0) {
+      message.success(`已生成 ${response.created.length} 个别名`);
+    } else {
+      message.warning('没有生成新的别名');
+    }
+    closeAliasGenerateModal();
+  } catch (error) {
+    handleApiError(error);
+    aliasGenerateLoading.value = false;
+  }
+}
+
+async function handleCreateCustomAlias(): Promise<void> {
+  if (!aliasGenerateTargetAccountId.value) {
+    return;
+  }
+
+  const suffix = aliasCustomSuffix.value.trim();
+  if (!suffix) {
+    message.warning('请输入自定义别名后缀');
+    return;
+  }
+
+  aliasGenerateLoading.value = true;
+  try {
+    const response = await api.createCustomAlias(aliasGenerateTargetAccountId.value, {
+      suffix,
+      fillToLimit: aliasFillToLimit.value
+    });
+    aliasByAccountId[aliasGenerateTargetAccountId.value] = response.items;
+    message.success(`新增成功，本次共创建 ${response.created.length} 个别名`);
+    closeAliasGenerateModal();
+  } catch (error) {
+    handleApiError(error);
+    aliasGenerateLoading.value = false;
+  }
+}
+
+async function handleToggleAliasStatus(row: AccountItem, alias: AccountAliasItem): Promise<void> {
+  aliasStatusLoadingByAliasId[alias.id] = true;
+  try {
+    const response = await api.updateAccountAlias(row.id, alias.id, {
+      isRegistered: !alias.isRegistered
+    });
+    const list = getAliasesByAccountId(row.id);
+    aliasByAccountId[row.id] = list.map((item) => (item.id === alias.id ? response.item : item));
+    message.success(response.item.isRegistered ? '已标记为已注册' : '已标记为未注册');
+  } catch (error) {
+    handleApiError(error);
+  } finally {
+    aliasStatusLoadingByAliasId[alias.id] = false;
+  }
+}
+
+async function handleCopyText(value: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(value);
+    message.success('已复制');
+  } catch {
+    message.error('复制失败，请手动复制');
+  }
+}
+
 async function loadAccounts(): Promise<void> {
   tableLoading.value = true;
   try {
@@ -844,6 +1226,14 @@ async function loadAccounts(): Promise<void> {
     accounts.value = response.items;
     const available = new Set(response.items.map((item) => item.id));
     checkedRowKeys.value = checkedRowKeys.value.filter((id) => available.has(id));
+    Object.keys(aliasByAccountId).forEach((key) => {
+      const id = Number(key);
+      if (!available.has(id)) {
+        delete aliasByAccountId[id];
+        delete aliasLoadingByAccountId[id];
+        delete aliasPopoverVisibleByAccountId[id];
+      }
+    });
   } catch (error) {
     handleApiError(error);
   } finally {
@@ -1083,17 +1473,16 @@ async function handleBatchDelete(): Promise<void> {
   }
 }
 
-async function handleOpenMailModal(row: AccountItem): Promise<void> {
+async function fetchMailMessages(accountId: number, account: string, alias = ''): Promise<void> {
   const mode = mailFetchMode.value;
-  mailVisible.value = true;
   mailLoading.value = true;
-  mailAccount.value = row.account;
+  mailAccount.value = alias || account;
   mailCurrentMode.value = mode;
   mailItems.value = [];
   selectedMailId.value = '';
 
   try {
-    const response = await api.getAccountMessages(row.id, mode);
+    const response = await api.getAccountMessages(accountId, mode, alias || undefined);
     mailAccount.value = response.account;
     mailCurrentMode.value = response.mode;
     mailItems.value = response.messages;
@@ -1104,6 +1493,39 @@ async function handleOpenMailModal(row: AccountItem): Promise<void> {
   } finally {
     mailLoading.value = false;
   }
+}
+
+async function handleOpenMailModal(row: AccountItem, alias = ''): Promise<void> {
+  mailVisible.value = true;
+  mailCurrentAccountId.value = row.id;
+  mailCurrentAlias.value = alias;
+  await fetchMailMessages(row.id, row.account, alias);
+}
+
+async function handleOpenAliasMailModal(row: AccountItem, aliasEmail: string): Promise<void> {
+  aliasPopoverVisibleByAccountId[row.id] = false;
+  await handleOpenMailModal(row, aliasEmail);
+}
+
+async function handleRefreshMail(): Promise<void> {
+  if (!mailCurrentAccountId.value) {
+    return;
+  }
+
+  const currentRow = accounts.value.find((item) => item.id === mailCurrentAccountId.value);
+  if (!currentRow) {
+    message.warning('当前账号不存在，请刷新列表后重试');
+    return;
+  }
+
+  await fetchMailMessages(currentRow.id, currentRow.account, mailCurrentAlias.value);
+}
+
+function handleMailModalAfterLeave(): void {
+  mailCurrentAccountId.value = null;
+  mailCurrentAlias.value = '';
+  mailItems.value = [];
+  selectedMailId.value = '';
 }
 
 async function handleSaveIngestConfig(): Promise<void> {

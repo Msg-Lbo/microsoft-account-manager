@@ -63,6 +63,18 @@ export interface AccountMailItem {
   content: string;
 }
 
+export interface AccountAliasItem {
+  id: number;
+  accountId: number;
+  account: string;
+  aliasEmail: string;
+  aliasSuffix: string;
+  remark: string | null;
+  isRegistered: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AuthUser {
   username: string;
 }
