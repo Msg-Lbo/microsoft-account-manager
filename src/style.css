@@ -328,6 +328,35 @@ body {
   margin-bottom: 14px;
 }
 
+.page-footer {
+  margin-top: 18px;
+  padding: 12px 14px;
+  border: 1px solid rgba(22, 52, 71, 0.14);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.58);
+  color: var(--muted);
+  font-size: 0.84rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.footer-links {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.footer-links a {
+  color: #1a5f7d;
+  text-decoration: none;
+}
+
+.footer-links a:hover {
+  text-decoration: underline;
+}
+
 @keyframes fade-up {
   from {
     opacity: 0;
@@ -379,5 +408,10 @@ body {
   .mail-content-panel {
     min-height: 260px;
     max-height: none;
+  }
+
+  .page-footer {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }

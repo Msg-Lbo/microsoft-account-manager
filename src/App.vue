@@ -429,6 +429,20 @@
         </div>
       </div>
     </n-modal>
+
+    <footer class="page-footer">
+      <span>Copyright © 2026 Msg-Lbo</span>
+      <span class="footer-links">
+        <a href="https://github.com/Msg-Lbo" target="_blank" rel="noopener noreferrer">我的 GitHub</a>
+        <a
+          href="https://github.com/Msg-Lbo/microsoft-account-manager"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          项目 GitHub
+        </a>
+      </span>
+    </footer>
   </div>
 </template>
 
