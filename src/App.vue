@@ -165,7 +165,7 @@
               :loading="tableLoading"
               :checked-row-keys="checkedRowKeys"
               :pagination="tablePagination"
-              :scroll-x="1260"
+              :scroll-x="1120"
               max-height="520"
               @update:checked-row-keys="handleCheckedRowKeysUpdate"
             />
@@ -622,18 +622,17 @@ const accountColumns: DataTableColumns<AccountItem> = [
         }
       )
   },
-  { title: '密码', key: 'password', width: 110, ellipsis: { tooltip: true } },
   {
     title: 'Client ID',
     key: 'clientId',
-    width: 160,
+    width: 100,
     ellipsis: { tooltip: true },
     render: (row) => row.clientId ?? '-'
   },
   {
     title: 'Refresh Token',
     key: 'refreshToken',
-    width: 170,
+    width: 100,
     ellipsis: { tooltip: true },
     render: (row) => row.refreshToken ?? '-'
   },
