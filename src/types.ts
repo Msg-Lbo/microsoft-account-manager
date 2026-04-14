@@ -11,6 +11,8 @@ export interface AccountItem {
   refreshedAt: string | null;
   fetchedAt: string | null;
   fetchedCount: number;
+  aliasCount?: number;
+  aliasRegisteredCount?: number;
 }
 
 export interface AccountPayload {

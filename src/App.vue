@@ -665,7 +665,7 @@ const accountColumns: DataTableColumns<AccountItem> = [
   {
     title: '操作',
     key: 'actions',
-    width: 230,
+    width: 290,
     fixed: 'right',
     render: (row) =>
       h('div', { class: 'action-cell' }, [
@@ -716,7 +716,8 @@ const accountColumns: DataTableColumns<AccountItem> = [
               ),
             default: () => renderAliasPopoverContent(row)
           }
-        )
+        ),
+        h('span', { class: 'alias-progress-indicator' }, resolveAliasProgressText(row))
       ])
   }
 ];
@@ -1003,6 +1004,30 @@ function openEditModal(row: AccountItem): void {
 
 function getAliasesByAccountId(accountId: number): AccountAliasItem[] {
   return aliasByAccountId[accountId] ?? [];
+}
+
+function getAliasStats(row: AccountItem): { total: number; registered: number } {
+  const aliases = aliasByAccountId[row.id];
+  if (aliases) {
+    const total = aliases.length;
+    const registered = aliases.reduce((count, item) => count + (item.isRegistered ? 1 : 0), 0);
+    return { total, registered };
+  }
+
+  const total = Math.max(Number(row.aliasCount ?? 0), 0);
+  const registered = Math.min(Math.max(Number(row.aliasRegisteredCount ?? 0), 0), total);
+  return { total, registered };
+}
+
+function resolveAliasProgressText(row: AccountItem): string {
+  const { total, registered } = getAliasStats(row);
+  if (total <= 0) {
+    return '(0/0)';
+  }
+  if (registered > 0) {
+    return `(${total}/${total})`;
+  }
+  return `(0/${total})`;
 }
 
 function resolveAliasStatusType(isRegistered: boolean): 'success' | 'warning' {

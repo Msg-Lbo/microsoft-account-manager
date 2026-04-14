@@ -150,6 +150,11 @@ body {
   white-space: nowrap;
 }
 
+.alias-progress-indicator {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
 .alias-popover {
   display: flex;
   flex-direction: column;

@@ -33,6 +33,8 @@ interface AccountRow {
   refreshedAt: string | null;
   fetchedAt: string | null;
   fetchedCount: number;
+  aliasCount: number;
+  aliasRegisteredCount: number;
 }
 
 interface AccountAliasRow {
@@ -166,8 +168,19 @@ const ACCOUNT_SELECT_SQL = `
     sync_message AS syncMessage,
     refreshed_at AS refreshedAt,
     fetched_at AS fetchedAt,
-    IFNULL(fetched_count, 0) AS fetchedCount
+    IFNULL(fetched_count, 0) AS fetchedCount,
+    IFNULL(aliasStats.aliasCount, 0) AS aliasCount,
+    IFNULL(aliasStats.aliasRegisteredCount, 0) AS aliasRegisteredCount
   FROM accounts
+  LEFT JOIN (
+    SELECT
+      account_id,
+      COUNT(*) AS aliasCount,
+      SUM(CASE WHEN IFNULL(is_registered, 0) = 1 THEN 1 ELSE 0 END) AS aliasRegisteredCount
+    FROM account_aliases
+    GROUP BY account_id
+  ) AS aliasStats
+    ON aliasStats.account_id = accounts.id
 `;
 
 const ACCOUNT_ALIAS_SELECT_SQL = `
