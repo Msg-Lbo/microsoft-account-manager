@@ -144,8 +144,10 @@ body {
 
 .action-cell {
   display: flex;
+  width: 100%;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
+  gap: 2px;
   flex-wrap: nowrap;
   white-space: nowrap;
 }

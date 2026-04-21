@@ -165,7 +165,7 @@
               :loading="tableLoading"
               :checked-row-keys="checkedRowKeys"
               :pagination="tablePagination"
-              :scroll-x="1210"
+              :scroll-x="1120"
               max-height="520"
               @update:checked-row-keys="handleCheckedRowKeysUpdate"
             />
@@ -665,7 +665,7 @@ const accountColumns: DataTableColumns<AccountItem> = [
   {
     title: '操作',
     key: 'actions',
-    width: 308,
+    width: 243,
     fixed: 'right',
     render: (row) =>
       h('div', { class: 'action-cell' }, [
