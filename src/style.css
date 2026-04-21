@@ -155,6 +155,18 @@ body {
   font-size: 0.78rem;
 }
 
+.copy-popover {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.copy-action-btn {
+  width: 100%;
+  justify-content: flex-start;
+}
+
 .alias-popover {
   display: flex;
   flex-direction: column;

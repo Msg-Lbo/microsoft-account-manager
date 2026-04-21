@@ -165,7 +165,7 @@
               :loading="tableLoading"
               :checked-row-keys="checkedRowKeys"
               :pagination="tablePagination"
-              :scroll-x="1120"
+              :scroll-x="1210"
               max-height="520"
               @update:checked-row-keys="handleCheckedRowKeysUpdate"
             />
@@ -503,6 +503,7 @@ const aliasLimit = 5;
 const aliasByAccountId = reactive<Record<number, AccountAliasItem[]>>({});
 const aliasLoadingByAccountId = reactive<Record<number, boolean>>({});
 const aliasPopoverVisibleByAccountId = reactive<Record<number, boolean>>({});
+const copyPopoverVisibleByAccountId = reactive<Record<number, boolean>>({});
 const aliasStatusLoadingByAliasId = reactive<Record<number, boolean>>({});
 
 const mailVisible = ref(false);
@@ -664,7 +665,7 @@ const accountColumns: DataTableColumns<AccountItem> = [
   {
     title: '操作',
     key: 'actions',
-    width: 240,
+    width: 308,
     fixed: 'right',
     render: (row) =>
       h('div', { class: 'action-cell' }, [
@@ -687,6 +688,33 @@ const accountColumns: DataTableColumns<AccountItem> = [
             onClick: () => handleDeleteAccount(row.id)
           },
           { default: () => '删除' }
+        ),
+        h(
+          NPopover,
+          {
+            trigger: 'click',
+            placement: 'bottom-end',
+            show: copyPopoverVisibleByAccountId[row.id] ?? false,
+            width: 128,
+            'onUpdate:show': (show: boolean) => {
+              copyPopoverVisibleByAccountId[row.id] = show;
+            }
+          },
+          {
+            trigger: () =>
+              h(
+                NButton,
+                {
+                  size: 'small',
+                  quaternary: true,
+                  onClick: (event: MouseEvent) => {
+                    event.stopPropagation();
+                  }
+                },
+                { default: () => '复制' }
+              ),
+            default: () => renderCopyPopoverContent(row)
+          }
         ),
         h(
           NPopover,
@@ -893,6 +921,9 @@ function clearSessionState(): void {
   Object.keys(aliasPopoverVisibleByAccountId).forEach((key) => {
     delete aliasPopoverVisibleByAccountId[Number(key)];
   });
+  Object.keys(copyPopoverVisibleByAccountId).forEach((key) => {
+    delete copyPopoverVisibleByAccountId[Number(key)];
+  });
   Object.keys(aliasStatusLoadingByAliasId).forEach((key) => {
     delete aliasStatusLoadingByAliasId[Number(key)];
   });
@@ -1030,6 +1061,26 @@ function resolveAliasStatusType(isRegistered: boolean): 'success' | 'warning' {
   return isRegistered ? 'success' : 'warning';
 }
 
+function buildAccountCopyText(row: AccountItem, type: 'account' | 'password' | 'all'): string {
+  if (type === 'account') {
+    return row.account;
+  }
+  if (type === 'password') {
+    return row.password;
+  }
+  return [row.account, row.password, row.clientId ?? '', row.refreshToken ?? ''].join('----');
+}
+
+async function handleCopyAccountField(
+  row: AccountItem,
+  type: 'account' | 'password' | 'all'
+): Promise<void> {
+  const copied = await handleCopyText(buildAccountCopyText(row, type));
+  if (copied) {
+    copyPopoverVisibleByAccountId[row.id] = false;
+  }
+}
+
 async function loadAliasesForAccount(row: AccountItem, force = false): Promise<void> {
   if (!force && aliasByAccountId[row.id]) {
     return;
@@ -1069,6 +1120,50 @@ function closeAliasGenerateModal(): void {
   aliasCustomSuffix.value = '';
   aliasGenerateTargetAccountId.value = null;
   aliasGenerateMode.value = 'random';
+}
+
+function renderCopyPopoverContent(row: AccountItem) {
+  return h('div', { class: 'copy-popover' }, [
+    h(
+      NButton,
+      {
+        size: 'tiny',
+        quaternary: true,
+        class: 'copy-action-btn',
+        onClick: (event: MouseEvent) => {
+          event.stopPropagation();
+          void handleCopyAccountField(row, 'account');
+        }
+      },
+      { default: () => '复制账号' }
+    ),
+    h(
+      NButton,
+      {
+        size: 'tiny',
+        quaternary: true,
+        class: 'copy-action-btn',
+        onClick: (event: MouseEvent) => {
+          event.stopPropagation();
+          void handleCopyAccountField(row, 'password');
+        }
+      },
+      { default: () => '复制密码' }
+    ),
+    h(
+      NButton,
+      {
+        size: 'tiny',
+        quaternary: true,
+        class: 'copy-action-btn',
+        onClick: (event: MouseEvent) => {
+          event.stopPropagation();
+          void handleCopyAccountField(row, 'all');
+        }
+      },
+      { default: () => '复制全部' }
+    )
+  ]);
 }
 
 function renderAliasPopoverContent(row: AccountItem) {
@@ -1254,12 +1349,14 @@ async function handleToggleAliasStatus(row: AccountItem, alias: AccountAliasItem
   }
 }
 
-async function handleCopyText(value: string): Promise<void> {
+async function handleCopyText(value: string): Promise<boolean> {
   try {
     await navigator.clipboard.writeText(value);
     message.success('已复制');
+    return true;
   } catch {
     message.error('复制失败，请手动复制');
+    return false;
   }
 }
 
@@ -1276,6 +1373,7 @@ async function loadAccounts(): Promise<void> {
         delete aliasByAccountId[id];
         delete aliasLoadingByAccountId[id];
         delete aliasPopoverVisibleByAccountId[id];
+        delete copyPopoverVisibleByAccountId[id];
       }
     });
   } catch (error) {
