@@ -388,15 +388,61 @@
       @after-leave="handleMailModalAfterLeave"
     >
       <template #header-extra>
-        <n-button
-          size="small"
-          secondary
-          :loading="mailLoading"
-          :disabled="!mailCurrentAccountId"
-          @click="handleRefreshMail"
-        >
-          刷新邮件
-        </n-button>
+        <n-space size="small">
+          <n-popover
+            trigger="click"
+            placement="bottom-end"
+            :show="mailCopyPopoverVisible"
+            :width="104"
+            @update:show="mailCopyPopoverVisible = $event"
+          >
+            <template #trigger>
+              <n-button
+                size="small"
+                quaternary
+                :disabled="!currentMailAccountRow"
+                @click.stop
+              >
+                复制
+              </n-button>
+            </template>
+            <div v-if="currentMailAccountRow" class="copy-popover">
+              <n-button
+                size="tiny"
+                quaternary
+                class="copy-action-btn"
+                @click.stop="handleCopyAccountField(currentMailAccountRow, 'account', () => { mailCopyPopoverVisible = false; })"
+              >
+                复制账号
+              </n-button>
+              <n-button
+                size="tiny"
+                quaternary
+                class="copy-action-btn"
+                @click.stop="handleCopyAccountField(currentMailAccountRow, 'password', () => { mailCopyPopoverVisible = false; })"
+              >
+                复制密码({{ currentMailAccountRow.password.length }})
+              </n-button>
+              <n-button
+                size="tiny"
+                quaternary
+                class="copy-action-btn"
+                @click.stop="handleCopyAccountField(currentMailAccountRow, 'all', () => { mailCopyPopoverVisible = false; })"
+              >
+                复制全部
+              </n-button>
+            </div>
+          </n-popover>
+          <n-button
+            size="small"
+            secondary
+            :loading="mailLoading"
+            :disabled="!currentMailAccountRow"
+            @click="handleRefreshMail"
+          >
+            刷新邮件
+          </n-button>
+        </n-space>
       </template>
       <div class="mail-modal-wrapper">
         <div class="mail-list-panel">
@@ -503,6 +549,7 @@ const aliasLimit = 5;
 const aliasByAccountId = reactive<Record<number, AccountAliasItem[]>>({});
 const aliasLoadingByAccountId = reactive<Record<number, boolean>>({});
 const aliasPopoverVisibleByAccountId = reactive<Record<number, boolean>>({});
+const copyPopoverVisibleByAccountId = reactive<Record<number, boolean>>({});
 const aliasStatusLoadingByAliasId = reactive<Record<number, boolean>>({});
 
 const mailVisible = ref(false);
@@ -514,6 +561,7 @@ const mailItems = ref<AccountMailItem[]>([]);
 const selectedMailId = ref('');
 const mailCurrentAccountId = ref<number | null>(null);
 const mailCurrentAlias = ref('');
+const mailCopyPopoverVisible = ref(false);
 
 const aliasGenerateVisible = ref(false);
 const aliasGenerateLoading = ref(false);
@@ -664,7 +712,7 @@ const accountColumns: DataTableColumns<AccountItem> = [
   {
     title: '操作',
     key: 'actions',
-    width: 240,
+    width: 243,
     fixed: 'right',
     render: (row) =>
       h('div', { class: 'action-cell' }, [
@@ -687,6 +735,35 @@ const accountColumns: DataTableColumns<AccountItem> = [
             onClick: () => handleDeleteAccount(row.id)
           },
           { default: () => '删除' }
+        ),
+        h(
+          NPopover,
+          {
+            trigger: 'click',
+            placement: 'bottom-end',
+            show: copyPopoverVisibleByAccountId[row.id] ?? false,
+            width: 104,
+            'onUpdate:show': (show: boolean) => {
+              copyPopoverVisibleByAccountId[row.id] = show;
+            }
+          },
+          {
+            trigger: () =>
+              h(
+                NButton,
+                {
+                  size: 'small',
+                  quaternary: true,
+                  onClick: (event: MouseEvent) => {
+                    event.stopPropagation();
+                  }
+                },
+                { default: () => '复制' }
+              ),
+            default: () => renderCopyPopoverContent(row, () => {
+              copyPopoverVisibleByAccountId[row.id] = false;
+            })
+          }
         ),
         h(
           NPopover,
@@ -744,6 +821,13 @@ const selectedMailText = computed(() => {
     return htmlToText(content);
   }
   return content;
+});
+
+const currentMailAccountRow = computed(() => {
+  if (!mailCurrentAccountId.value) {
+    return null;
+  }
+  return accounts.value.find((item) => item.id === mailCurrentAccountId.value) ?? null;
 });
 
 const mailModeOptions: Array<{ label: string; value: MailFetchMode }> = [
@@ -893,6 +977,9 @@ function clearSessionState(): void {
   Object.keys(aliasPopoverVisibleByAccountId).forEach((key) => {
     delete aliasPopoverVisibleByAccountId[Number(key)];
   });
+  Object.keys(copyPopoverVisibleByAccountId).forEach((key) => {
+    delete copyPopoverVisibleByAccountId[Number(key)];
+  });
   Object.keys(aliasStatusLoadingByAliasId).forEach((key) => {
     delete aliasStatusLoadingByAliasId[Number(key)];
   });
@@ -1030,6 +1117,27 @@ function resolveAliasStatusType(isRegistered: boolean): 'success' | 'warning' {
   return isRegistered ? 'success' : 'warning';
 }
 
+function buildAccountCopyText(row: AccountItem, type: 'account' | 'password' | 'all'): string {
+  if (type === 'account') {
+    return row.account;
+  }
+  if (type === 'password') {
+    return row.password;
+  }
+  return [row.account, row.password, row.clientId ?? '', row.refreshToken ?? ''].join('----');
+}
+
+async function handleCopyAccountField(
+  row: AccountItem,
+  type: 'account' | 'password' | 'all',
+  onSuccess?: () => void
+): Promise<void> {
+  const copied = await handleCopyText(buildAccountCopyText(row, type));
+  if (copied) {
+    onSuccess?.();
+  }
+}
+
 async function loadAliasesForAccount(row: AccountItem, force = false): Promise<void> {
   if (!force && aliasByAccountId[row.id]) {
     return;
@@ -1069,6 +1177,50 @@ function closeAliasGenerateModal(): void {
   aliasCustomSuffix.value = '';
   aliasGenerateTargetAccountId.value = null;
   aliasGenerateMode.value = 'random';
+}
+
+function renderCopyPopoverContent(row: AccountItem, onSuccess?: () => void) {
+  return h('div', { class: 'copy-popover' }, [
+    h(
+      NButton,
+      {
+        size: 'tiny',
+        quaternary: true,
+        class: 'copy-action-btn',
+        onClick: (event: MouseEvent) => {
+          event.stopPropagation();
+          void handleCopyAccountField(row, 'account', onSuccess);
+        }
+      },
+      { default: () => '复制账号' }
+    ),
+    h(
+      NButton,
+      {
+        size: 'tiny',
+        quaternary: true,
+        class: 'copy-action-btn',
+        onClick: (event: MouseEvent) => {
+          event.stopPropagation();
+          void handleCopyAccountField(row, 'password', onSuccess);
+        }
+      },
+      { default: () => `复制密码(${row.password.length})` }
+    ),
+    h(
+      NButton,
+      {
+        size: 'tiny',
+        quaternary: true,
+        class: 'copy-action-btn',
+        onClick: (event: MouseEvent) => {
+          event.stopPropagation();
+          void handleCopyAccountField(row, 'all', onSuccess);
+        }
+      },
+      { default: () => '复制全部' }
+    )
+  ]);
 }
 
 function renderAliasPopoverContent(row: AccountItem) {
@@ -1254,12 +1406,14 @@ async function handleToggleAliasStatus(row: AccountItem, alias: AccountAliasItem
   }
 }
 
-async function handleCopyText(value: string): Promise<void> {
+async function handleCopyText(value: string): Promise<boolean> {
   try {
     await navigator.clipboard.writeText(value);
     message.success('已复制');
+    return true;
   } catch {
     message.error('复制失败，请手动复制');
+    return false;
   }
 }
 
@@ -1276,6 +1430,7 @@ async function loadAccounts(): Promise<void> {
         delete aliasByAccountId[id];
         delete aliasLoadingByAccountId[id];
         delete aliasPopoverVisibleByAccountId[id];
+        delete copyPopoverVisibleByAccountId[id];
       }
     });
   } catch (error) {
@@ -1552,11 +1707,7 @@ async function handleOpenAliasMailModal(row: AccountItem, aliasEmail: string): P
 }
 
 async function handleRefreshMail(): Promise<void> {
-  if (!mailCurrentAccountId.value) {
-    return;
-  }
-
-  const currentRow = accounts.value.find((item) => item.id === mailCurrentAccountId.value);
+  const currentRow = currentMailAccountRow.value;
   if (!currentRow) {
     message.warning('当前账号不存在，请刷新列表后重试');
     return;
@@ -1570,6 +1721,7 @@ function handleMailModalAfterLeave(): void {
   mailCurrentAlias.value = '';
   mailItems.value = [];
   selectedMailId.value = '';
+  mailCopyPopoverVisible.value = false;
 }
 
 async function handleSaveIngestConfig(): Promise<void> {
