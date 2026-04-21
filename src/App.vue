@@ -695,7 +695,7 @@ const accountColumns: DataTableColumns<AccountItem> = [
             trigger: 'click',
             placement: 'bottom-end',
             show: copyPopoverVisibleByAccountId[row.id] ?? false,
-            width: 128,
+            width: 104,
             'onUpdate:show': (show: boolean) => {
               copyPopoverVisibleByAccountId[row.id] = show;
             }
@@ -1148,7 +1148,7 @@ function renderCopyPopoverContent(row: AccountItem) {
           void handleCopyAccountField(row, 'password');
         }
       },
-      { default: () => '复制密码' }
+      { default: () => `复制密码(${row.password.length})` }
     ),
     h(
       NButton,
