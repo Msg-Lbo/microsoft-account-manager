@@ -388,15 +388,61 @@
       @after-leave="handleMailModalAfterLeave"
     >
       <template #header-extra>
-        <n-button
-          size="small"
-          secondary
-          :loading="mailLoading"
-          :disabled="!mailCurrentAccountId"
-          @click="handleRefreshMail"
-        >
-          刷新邮件
-        </n-button>
+        <n-space size="small">
+          <n-popover
+            trigger="click"
+            placement="bottom-end"
+            :show="mailCopyPopoverVisible"
+            :width="104"
+            @update:show="mailCopyPopoverVisible = $event"
+          >
+            <template #trigger>
+              <n-button
+                size="small"
+                quaternary
+                :disabled="!currentMailAccountRow"
+                @click.stop
+              >
+                复制
+              </n-button>
+            </template>
+            <div v-if="currentMailAccountRow" class="copy-popover">
+              <n-button
+                size="tiny"
+                quaternary
+                class="copy-action-btn"
+                @click.stop="handleCopyAccountField(currentMailAccountRow, 'account', () => { mailCopyPopoverVisible = false; })"
+              >
+                复制账号
+              </n-button>
+              <n-button
+                size="tiny"
+                quaternary
+                class="copy-action-btn"
+                @click.stop="handleCopyAccountField(currentMailAccountRow, 'password', () => { mailCopyPopoverVisible = false; })"
+              >
+                复制密码({{ currentMailAccountRow.password.length }})
+              </n-button>
+              <n-button
+                size="tiny"
+                quaternary
+                class="copy-action-btn"
+                @click.stop="handleCopyAccountField(currentMailAccountRow, 'all', () => { mailCopyPopoverVisible = false; })"
+              >
+                复制全部
+              </n-button>
+            </div>
+          </n-popover>
+          <n-button
+            size="small"
+            secondary
+            :loading="mailLoading"
+            :disabled="!currentMailAccountRow"
+            @click="handleRefreshMail"
+          >
+            刷新邮件
+          </n-button>
+        </n-space>
       </template>
       <div class="mail-modal-wrapper">
         <div class="mail-list-panel">
@@ -515,6 +561,7 @@ const mailItems = ref<AccountMailItem[]>([]);
 const selectedMailId = ref('');
 const mailCurrentAccountId = ref<number | null>(null);
 const mailCurrentAlias = ref('');
+const mailCopyPopoverVisible = ref(false);
 
 const aliasGenerateVisible = ref(false);
 const aliasGenerateLoading = ref(false);
@@ -713,7 +760,9 @@ const accountColumns: DataTableColumns<AccountItem> = [
                 },
                 { default: () => '复制' }
               ),
-            default: () => renderCopyPopoverContent(row)
+            default: () => renderCopyPopoverContent(row, () => {
+              copyPopoverVisibleByAccountId[row.id] = false;
+            })
           }
         ),
         h(
@@ -772,6 +821,13 @@ const selectedMailText = computed(() => {
     return htmlToText(content);
   }
   return content;
+});
+
+const currentMailAccountRow = computed(() => {
+  if (!mailCurrentAccountId.value) {
+    return null;
+  }
+  return accounts.value.find((item) => item.id === mailCurrentAccountId.value) ?? null;
 });
 
 const mailModeOptions: Array<{ label: string; value: MailFetchMode }> = [
@@ -1073,11 +1129,12 @@ function buildAccountCopyText(row: AccountItem, type: 'account' | 'password' | '
 
 async function handleCopyAccountField(
   row: AccountItem,
-  type: 'account' | 'password' | 'all'
+  type: 'account' | 'password' | 'all',
+  onSuccess?: () => void
 ): Promise<void> {
   const copied = await handleCopyText(buildAccountCopyText(row, type));
   if (copied) {
-    copyPopoverVisibleByAccountId[row.id] = false;
+    onSuccess?.();
   }
 }
 
@@ -1122,7 +1179,7 @@ function closeAliasGenerateModal(): void {
   aliasGenerateMode.value = 'random';
 }
 
-function renderCopyPopoverContent(row: AccountItem) {
+function renderCopyPopoverContent(row: AccountItem, onSuccess?: () => void) {
   return h('div', { class: 'copy-popover' }, [
     h(
       NButton,
@@ -1132,7 +1189,7 @@ function renderCopyPopoverContent(row: AccountItem) {
         class: 'copy-action-btn',
         onClick: (event: MouseEvent) => {
           event.stopPropagation();
-          void handleCopyAccountField(row, 'account');
+          void handleCopyAccountField(row, 'account', onSuccess);
         }
       },
       { default: () => '复制账号' }
@@ -1145,7 +1202,7 @@ function renderCopyPopoverContent(row: AccountItem) {
         class: 'copy-action-btn',
         onClick: (event: MouseEvent) => {
           event.stopPropagation();
-          void handleCopyAccountField(row, 'password');
+          void handleCopyAccountField(row, 'password', onSuccess);
         }
       },
       { default: () => `复制密码(${row.password.length})` }
@@ -1158,7 +1215,7 @@ function renderCopyPopoverContent(row: AccountItem) {
         class: 'copy-action-btn',
         onClick: (event: MouseEvent) => {
           event.stopPropagation();
-          void handleCopyAccountField(row, 'all');
+          void handleCopyAccountField(row, 'all', onSuccess);
         }
       },
       { default: () => '复制全部' }
@@ -1650,11 +1707,7 @@ async function handleOpenAliasMailModal(row: AccountItem, aliasEmail: string): P
 }
 
 async function handleRefreshMail(): Promise<void> {
-  if (!mailCurrentAccountId.value) {
-    return;
-  }
-
-  const currentRow = accounts.value.find((item) => item.id === mailCurrentAccountId.value);
+  const currentRow = currentMailAccountRow.value;
   if (!currentRow) {
     message.warning('当前账号不存在，请刷新列表后重试');
     return;
@@ -1668,6 +1721,7 @@ function handleMailModalAfterLeave(): void {
   mailCurrentAlias.value = '';
   mailItems.value = [];
   selectedMailId.value = '';
+  mailCopyPopoverVisible.value = false;
 }
 
 async function handleSaveIngestConfig(): Promise<void> {
