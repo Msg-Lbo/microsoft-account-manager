@@ -154,6 +154,25 @@
                   批量删除
                 </n-button>
                 <n-button size="small" :loading="tableLoading" @click="loadAccounts">刷新列表</n-button>
+                <n-popover
+                  trigger="click"
+                  placement="bottom-end"
+                  :show="exportPopoverVisible"
+                  :width="104"
+                  @update:show="exportPopoverVisible = $event"
+                >
+                  <template #trigger>
+                    <n-button size="small" @click.stop>导出</n-button>
+                  </template>
+                  <div class="copy-popover">
+                    <n-button size="tiny" quaternary class="copy-action-btn" @click.stop="handleExportAccounts(false)">
+                      导出勾选
+                    </n-button>
+                    <n-button size="tiny" quaternary class="copy-action-btn" @click.stop="handleExportAccounts(true)">
+                      导出全部
+                    </n-button>
+                  </div>
+                </n-popover>
               </div>
             </div>
 
@@ -551,6 +570,7 @@ const aliasLoadingByAccountId = reactive<Record<number, boolean>>({});
 const aliasPopoverVisibleByAccountId = reactive<Record<number, boolean>>({});
 const copyPopoverVisibleByAccountId = reactive<Record<number, boolean>>({});
 const aliasStatusLoadingByAliasId = reactive<Record<number, boolean>>({});
+const exportPopoverVisible = ref(false);
 
 const mailVisible = ref(false);
 const mailLoading = ref(false);
@@ -1068,6 +1088,35 @@ function normalizePayload(payload: Required<AccountPayload>): AccountPayload {
     refreshToken: payload.refreshToken.trim(),
     remark: payload.remark.trim()
   };
+}
+
+function buildAccountsExportText(items: AccountItem[]): string {
+  return items
+    .map((item) => [item.account, item.password, item.clientId ?? '', item.refreshToken ?? ''].join('----'))
+    .join('\n');
+}
+
+function buildExportFilename(all: boolean): string {
+  const now = new Date();
+  const parts = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0'),
+    String(now.getHours()).padStart(2, '0'),
+    String(now.getMinutes()).padStart(2, '0'),
+    String(now.getSeconds()).padStart(2, '0')
+  ];
+  return `账号导出-${all ? '全部' : '勾选'}-${parts.join('')}.txt`;
+}
+
+function downloadTxtFile(filename: string, content: string): void {
+  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 function clearCreateForm(): void {
@@ -1607,6 +1656,26 @@ async function importAccountsText(rawText: string, sourceLabel: string): Promise
 
 async function handleImport(): Promise<void> {
   await importAccountsText(importText.value, '文本内容');
+}
+
+function handleExportAccounts(all: boolean): void {
+  const targetItems = all
+    ? accounts.value
+    : accounts.value.filter((item) => checkedRowKeys.value.includes(item.id));
+
+  if (!all && targetItems.length === 0) {
+    message.warning('请先勾选要导出的账号');
+    return;
+  }
+
+  if (all && targetItems.length === 0) {
+    message.warning('当前没有可导出的账号');
+    return;
+  }
+
+  downloadTxtFile(buildExportFilename(all), buildAccountsExportText(targetItems));
+  exportPopoverVisible.value = false;
+  message.success(all ? `已导出全部 ${targetItems.length} 条账号` : `已导出 ${targetItems.length} 条勾选账号`);
 }
 
 async function handleRefreshAccounts(all: boolean): Promise<void> {
